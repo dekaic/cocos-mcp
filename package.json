@@ -1,11 +1,15 @@
 {
   "package_version": 2,
   "version": "2.0.0",
-  "name": "cc-3-8-x-mcp",
-  "title": "Cocos Creator 3.8.x MCP Server",
+  "name": "cocos-mcp",
+  "title": "Cocos MCP",
   "description": "把 Cocos Creator 3.8.x 编辑器能力（scene/asset-db/preview/local）以 MCP 协议暴露给外部 AI 客户端；兼容原 dev-reload 信号文件通道",
   "license": "Apache-2.0",
-  "author": "付饶",
+  "author": "dekaic",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dekaic/cocos-mcp.git"
+  },
   "editor": ">=3.8.0",
   "main": "./main.js",
   "panels": {

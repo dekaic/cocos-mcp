@@ -502,7 +502,7 @@ function addRootTargetOverride(prefabData, rootId, sourceCompId, propertyPath, t
   //
   // 为什么：Cocos 加载 prefab 时，若 rootTargetOverrides 数组里前面有数组字段
   // override，后面位置的单字段 override 会被静默跳过（实测 cocos 3.8.x 行为，
-  // 见 forest/extensions/cc-3-8-x-mcp/doc/cli.md 坑 14）。单字段插前面规避此 bug。
+  // 见 forest/extensions/cocos-mcp/doc/cli.md 坑 14）。单字段插前面规避此 bug。
   const newRef = { __id__: overrideId };
   const isSingleField = normalizedPath.length === 1;
   if (isSingleField) {

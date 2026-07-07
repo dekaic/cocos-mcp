@@ -19,7 +19,7 @@
  *   tools/call 收到前缀名 → 拆出 projectShortName → 查 editor URL → HTTP 转发
  *
  * 客户端接入：
- *   claude mcp add cocos -- node /path/to/forest/extensions/cc-3-8-x-mcp/router/bin.js
+ *   claude mcp add cocos -- node /path/to/forest/extensions/cocos-mcp/router/bin.js
  */
 
 var fs = require('fs');

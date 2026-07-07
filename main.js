@@ -164,7 +164,7 @@ exports.methods = {
         return url;
     },
     async openPanel() {
-        await Editor.Panel.open('cc-3-8-x-mcp');
+        await Editor.Panel.open('cocos-mcp');
     },
     async restartServer() {
         await stopMcpServer();
@@ -445,7 +445,7 @@ async function startMcpServer() {
     }
 
     var server = sdk.createServer({
-        name: 'cc-3-8-x-mcp',
+        name: 'cocos-mcp',
         version: '2.0.0',
         port: port,
         tools: toolDefs.map(function (t) {
@@ -467,7 +467,7 @@ async function startMcpServer() {
         }),
     });
 
-    // 启动 HTTP（cc-3-8-x-mcp 只跑 HTTP，不跑 stdio）
+    // 启动 HTTP（cocos-mcp 只跑 HTTP，不跑 stdio）
     await server.start('http');
     _mcpServer = {
         started: true,
@@ -540,7 +540,7 @@ async function doOpenPrefab(urlOrPath) {
     log('open-prefab: opened ' + dbUrl + ' (uuid=' + uuid + ')');
 }
 
-/** 重启指定插件（disable → enable）让其 JS 代码改动生效；name 缺省为本插件 cc-3-8-x-mcp。
+/** 重启指定插件（disable → enable）让其 JS 代码改动生效；name 缺省为本插件 cocos-mcp。
  *  注意：reload 本插件自身时，本函数处于即将被卸载的 main.js 上下文，必须 fire-and-forget。
  *  Editor.Package.disable 是 host 进程 API，扩展沙箱卸载后仍然有效；
  *  enable 在 disable 完成后用 setTimeout 触发，给 unload 收尾留窗口。
@@ -549,7 +549,7 @@ async function doOpenPrefab(urlOrPath) {
  *  "[Package] Unknown and unable to start"，必须先用 getPackages 反查注册路径。
  */
 function doRestartSelf(name) {
-    name = name || 'cc-3-8-x-mcp';
+    name = name || 'cocos-mcp';
     log('restart-package: scheduling disable → enable for ' + name);
     setImmediate(function () {
         Promise.resolve()

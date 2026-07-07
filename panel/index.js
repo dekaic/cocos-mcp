@@ -144,7 +144,7 @@ exports.methods = {
 
     async refreshStatus() {
         try {
-            const s = await Editor.Message.request('cc-3-8-x-mcp', 'get-status');
+            const s = await Editor.Message.request('cocos-mcp', 'get-status');
             if (!s) return;
             this.$.gitBranch.textContent = s.gitBranch || '-';
             this.$.gitHead.textContent = s.gitHead || '-';
@@ -203,7 +203,7 @@ exports.methods = {
 
     async refreshWorktrees() {
         try {
-            const list = await Editor.Message.request('cc-3-8-x-mcp', 'list-worktrees');
+            const list = await Editor.Message.request('cocos-mcp', 'list-worktrees');
             if (!Array.isArray(list) || !list.length) {
                 this.$.worktreeList.innerHTML = '<div style="opacity:0.5">（未发现其他 worktree）</div>';
                 return;
@@ -220,29 +220,29 @@ exports.methods = {
     async onRefreshClick() {
         this.showToast('刷新中…');
         try {
-            await Editor.Message.request('cc-3-8-x-mcp', 'trigger-refresh');
+            await Editor.Message.request('cocos-mcp', 'trigger-refresh');
             this.showToast('已刷新资源+场景');
             this.refreshStatus();
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onSoftReloadClick() {
-        try { await Editor.Message.request('cc-3-8-x-mcp', 'soft-reload-scene'); this.showToast('场景已软重载'); }
+        try { await Editor.Message.request('cocos-mcp', 'soft-reload-scene'); this.showToast('场景已软重载'); }
         catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onQueryUrlClick() {
         try {
-            const url = await Editor.Message.request('cc-3-8-x-mcp', 'query-preview-url');
+            const url = await Editor.Message.request('cocos-mcp', 'query-preview-url');
             this.showToast('预览: ' + url);
             this.refreshStatus();
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onOpenDevClick() {
-        try { await Editor.Message.request('cc-3-8-x-mcp', 'open-dev-dir'); this.showToast('已打开 .dev'); }
+        try { await Editor.Message.request('cocos-mcp', 'open-dev-dir'); this.showToast('已打开 .dev'); }
         catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onCleanClick() {
         try {
-            const removed = await Editor.Message.request('cc-3-8-x-mcp', 'clean-dev-dir');
+            const removed = await Editor.Message.request('cocos-mcp', 'clean-dev-dir');
             this.showToast('已清理 ' + (removed ? removed.length : 0) + ' 个文件');
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
@@ -250,13 +250,13 @@ exports.methods = {
         const url = (this.$.reimportInput.value || '').trim();
         if (!url) { this.showToast('请输入 assetUrl'); return; }
         try {
-            await Editor.Message.request('cc-3-8-x-mcp', 'trigger-reimport', url);
+            await Editor.Message.request('cocos-mcp', 'trigger-reimport', url);
             this.showToast('已重新导入: ' + url);
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onCopyMcpUrl() {
         try {
-            const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-mcp-config');
+            const cfg = await Editor.Message.request('cocos-mcp', 'get-mcp-config');
             if (!cfg || !cfg.url) { this.showToast('MCP 未运行'); return; }
             await navigator.clipboard.writeText(cfg.url);
             this.showToast('已复制: ' + cfg.url);
@@ -264,7 +264,7 @@ exports.methods = {
     },
     async onCopyCli() {
         try {
-            const cfg = await Editor.Message.request('cc-3-8-x-mcp', 'get-mcp-config');
+            const cfg = await Editor.Message.request('cocos-mcp', 'get-mcp-config');
             if (!cfg || !cfg.cliAddCommand) { this.showToast('MCP 未运行'); return; }
             await navigator.clipboard.writeText(cfg.cliAddCommand);
             this.showToast('已复制 CLI 命令');
@@ -273,7 +273,7 @@ exports.methods = {
     async onRestartMcp() {
         this.showToast('重启 MCP…');
         try {
-            await Editor.Message.request('cc-3-8-x-mcp', 'restart-server');
+            await Editor.Message.request('cocos-mcp', 'restart-server');
             this.showToast('MCP 已重启');
             this.refreshStatus();
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }

@@ -12,11 +12,17 @@
 //   5. prefab_batch opsJsonPath 相对路径报错
 // ============================================================
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const {
+    makeLabel,
+    makeNode,
+    makePrefabRoot,
+} = require('../../cli/src/primitives.js');
+const { parsePrefab } = require('../../cli/src/parse.js');
 
 const {
     isOfflineTool,
@@ -25,17 +31,37 @@ const {
     OFFLINE_TOOLS,
 } = require('../src/offline-tools.js');
 
-// fixture: HomeUI.prefab（只读，在 cli/test/fixtures/）
-const FIXTURE_PATH = path.resolve(
-    __dirname,
-    '../../cli/test/fixtures/HomeUI.prefab'
-);
+const TMP_FILES = [];
+var nextTmpId = 0;
+
+after(() => {
+    for (var filePath of TMP_FILES) {
+        try { fs.unlinkSync(filePath); } catch (_) {}
+    }
+});
+
+function makeMinimalHomePrefab() {
+    return [
+        makePrefabRoot({ name: 'HomeUI', rootId: 1 }),
+        makeNode({ name: 'HomeUI', childIds: [2], active: true }),
+        makeNode({ name: 'title', parentId: 1, componentIds: [3], active: true }),
+        makeLabel({ nodeId: 2, string: 'Start' }),
+    ];
+}
+
+function makeFixture(tag) {
+    var dst = path.join(
+        os.tmpdir(),
+        'HomeUI-router-fixture-' + tag + '-' + process.pid + '-' + nextTmpId++ + '.prefab'
+    );
+    fs.writeFileSync(dst, JSON.stringify(makeMinimalHomePrefab(), null, 2) + '\n', 'utf-8');
+    TMP_FILES.push(dst);
+    return dst;
+}
 
 // 复制 fixture 到 tmp 用于写操作
 function makeTmp(tag) {
-    var dst = path.join(os.tmpdir(), 'HomeUI-router-' + tag + '-' + Date.now() + '.prefab');
-    fs.copyFileSync(FIXTURE_PATH, dst);
-    return dst;
+    return makeFixture(tag);
 }
 
 // ── OFFLINE_TOOLS 定义完整性 ────────────────────────────────────
@@ -84,8 +110,9 @@ test('requireAbsolutePath 绝对路径不抛错', () => {
 // ── prefab_query happy path ─────────────────────────────────────
 
 test('prefab_query type=tree 返回 MCP content，根节点名称为 HomeUI', async () => {
+    var fixturePath = makeFixture('query-tree');
     var result = await handleOfflineToolCall('prefab_query', {
-        filePath: FIXTURE_PATH,
+        filePath: fixturePath,
         selector: { type: 'tree' },
     });
 
@@ -98,8 +125,9 @@ test('prefab_query type=tree 返回 MCP content，根节点名称为 HomeUI', as
 });
 
 test('prefab_query 无 selector 默认返回 tree', async () => {
+    var fixturePath = makeFixture('query-default');
     var result = await handleOfflineToolCall('prefab_query', {
-        filePath: FIXTURE_PATH,
+        filePath: fixturePath,
     });
 
     var data = JSON.parse(result.content[0].text);
@@ -107,8 +135,9 @@ test('prefab_query 无 selector 默认返回 tree', async () => {
 });
 
 test('prefab_query type=find 返回 cc.Label id 列表', async () => {
+    var fixturePath = makeFixture('query-find');
     var result = await handleOfflineToolCall('prefab_query', {
-        filePath: FIXTURE_PATH,
+        filePath: fixturePath,
         selector: { type: 'find', nodeType: 'cc.Label' },
     });
 
@@ -172,7 +201,7 @@ test('prefab_batch 从 JSON 文件读取 ops，成功写回', async () => {
     var tmp = makeTmp('batch');
     var opsJson = path.join(os.tmpdir(), 'router-batch-ops-' + Date.now() + '.json');
     var ops = [
-        { op: 'set-active', node: 'HomeUI', active: true },
+        { op: 'set-active', node: 'HomeUI', active: false },
     ];
     fs.writeFileSync(opsJson, JSON.stringify(ops), 'utf-8');
 
@@ -185,6 +214,10 @@ test('prefab_batch 从 JSON 文件读取 ops，成功写回', async () => {
         var data = JSON.parse(result.content[0].text);
         assert.equal(data.changed, true);
         assert.equal(data.opsApplied, 1);
+
+        var reparsed = parsePrefab(tmp);
+        var root = reparsed.findNodeByName('HomeUI');
+        assert.equal(root._active, false, 'prefab_batch 应实际写回 _active=false');
     } finally {
         try { fs.unlinkSync(tmp); } catch (_) {}
         try { fs.unlinkSync(opsJson); } catch (_) {}
@@ -206,10 +239,11 @@ test('prefab_batch 相对路径 filePath 抛错', async () => {
 });
 
 test('prefab_batch 相对路径 opsJsonPath 抛错', async () => {
+    var fixturePath = makeFixture('batch-relative-ops');
     await assert.rejects(
         function () {
             return handleOfflineToolCall('prefab_batch', {
-                filePath: FIXTURE_PATH,
+                filePath: fixturePath,
                 opsJsonPath: 'relative/ops.json',
             });
         },

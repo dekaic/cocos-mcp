@@ -26,6 +26,9 @@
     }
   },
   "contributions": {
+    "scene": {
+      "script": "./scene/index.js"
+    },
     "menu": [
       {
         "path": "i18n:menu.extension/Cocos MCP",

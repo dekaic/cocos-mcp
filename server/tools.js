@@ -36,6 +36,131 @@ function defineTools(ctx) {
             },
         },
         {
+            name: 'scene_add_node',
+            description: '在当前场景中创建一个真实子节点。可选设置本地 position 与 active；随后可用 scene_create_component、scene_set_property 继续配置。',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    parentUuid: { type: 'string', description: '父节点 uuid' },
+                    name: { type: 'string', description: '新节点名称' },
+                    position: {
+                        type: 'object',
+                        properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+                    },
+                    active: { type: 'boolean' },
+                },
+                required: ['parentUuid', 'name'],
+            },
+            handler: async function (args) {
+                return await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'addNode',
+                    args: [args],
+                });
+            },
+        },
+        {
+            name: 'scene_clone_node',
+            description: '复制当前场景中的节点树，并作为指定父节点的子节点。',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    sourceUuid: { type: 'string', description: '源节点 uuid' },
+                    parentUuid: { type: 'string', description: '目标父节点 uuid' },
+                    name: { type: 'string', description: '可选：复制后名称' },
+                    position: {
+                        type: 'object',
+                        properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+                    },
+                    active: { type: 'boolean' },
+                },
+                required: ['sourceUuid', 'parentUuid'],
+            },
+            handler: async function (args) {
+                return await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'cloneNode',
+                    args: [args],
+                });
+            },
+        },
+        {
+            name: 'scene_remove_node',
+            description: '从当前场景移除指定节点及其子树；不能移除 Scene 根。',
+            inputSchema: {
+                type: 'object',
+                properties: { uuid: { type: 'string', description: '目标节点 uuid' } },
+                required: ['uuid'],
+            },
+            handler: async function (args) {
+                return await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'removeNode',
+                    args: [args],
+                });
+            },
+        },
+        {
+            name: 'scene_reparent_node',
+            description: '调整当前场景节点的父节点；可选设置新的本地 position。',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    uuid: { type: 'string', description: '目标节点 uuid' },
+                    parentUuid: { type: 'string', description: '新父节点 uuid' },
+                    position: {
+                        type: 'object',
+                        properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+                    },
+                },
+                required: ['uuid', 'parentUuid'],
+            },
+            handler: async function (args) {
+                return await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'reparentNode',
+                    args: [args],
+                });
+            },
+        },
+        {
+            name: 'scene_remove_component',
+            description: '从当前场景节点移除指定组件。',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    uuid: { type: 'string', description: '目标节点 uuid' },
+                    component: { type: 'string', description: '组件类名，如 cc.LabelOutline' },
+                },
+                required: ['uuid', 'component'],
+            },
+            handler: async function (args) {
+                return await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'removeComponent',
+                    args: [args],
+                });
+            },
+        },
+        {
+            name: 'scene_create_component',
+            description: '为场景节点添加指定组件（如 cc.UISkew）',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    uuid: { type: 'string', description: '目标节点 uuid' },
+                    component: { type: 'string', description: 'Cocos 组件类名，如 cc.UISkew' },
+                },
+                required: ['uuid', 'component'],
+            },
+            handler: async function (args) {
+                return await msg('scene', 'create-component', {
+                    uuid: args.uuid,
+                    component: args.component,
+                });
+            },
+        },
+        {
             name: 'scene_set_property',
             description: '设置节点/组件属性。path 是 dump path（如 "position" 或 "__comps__.0.string"），dump 是 {type,value}。\n⚠️ 注意：若目的是修改 prefab 资源文件的属性，建议改用 prefab_edit（offline，不需要编辑器运行，直接读写 .prefab 文件，支持嵌套 prefab override）；scene_set_property 仅适用于修改运行时场景节点或需要编辑器上下文的场景。',
             inputSchema: {

@@ -35,7 +35,23 @@ function applyNodeOptions(node, options) {
     if (typeof options.name === 'string' && options.name) node.name = options.name;
 }
 
+function describeNodeTree(node) {
+    return {
+        uuid: node.uuid,
+        name: node.name,
+        active: node.active,
+        layer: node.layer,
+        children: node.children.map(describeNodeTree),
+    };
+}
+
 exports.methods = {
+    queryNodeTree(uuid) {
+        var scene = cc.director.getScene();
+        if (!scene) throw new Error('scene is not loaded');
+        return describeNodeTree(uuid ? requireNode(uuid, 'node') : scene);
+    },
+
     addNode(options) {
         if (!options || !options.parentUuid) throw new Error('parentUuid is required');
         if (!options.name) throw new Error('name is required');

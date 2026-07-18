@@ -14,6 +14,18 @@ function createTools(calls) {
     });
 }
 
+test('scene_query_node_tree reads through the cocos-mcp scene script', async () => {
+    const calls = [];
+    const tool = createTools(calls).find((item) => item.name === 'scene_query_node_tree');
+
+    assert.equal(await tool.handler({ uuid: 'node' }), 'ok');
+    assert.deepEqual(calls, [[
+        'scene',
+        'execute-scene-script',
+        { name: 'cocos-mcp', method: 'queryNodeTree', args: ['node'] },
+    ]]);
+});
+
 test('scene node tools route through the cocos-mcp scene script', async () => {
     const calls = [];
     const tools = createTools(calls);

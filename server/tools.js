@@ -39,7 +39,11 @@ function defineTools(ctx) {
                 properties: { uuid: { type: 'string', description: '可选：节点 uuid' } },
             },
             handler: async function (args) {
-                return await msg('scene', 'query-node-tree', args.uuid);
+                return await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'queryNodeTree',
+                    args: [args.uuid],
+                });
             },
         },
         {

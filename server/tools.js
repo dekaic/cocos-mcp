@@ -10,6 +10,25 @@ function defineTools(ctx) {
     var msg = ctx.msg;   // async (target, name, ...args) => result
     var local = ctx.local; // { getPreviewUrl, doReimport, doRefreshAssets, doReloadScene, listWorktrees, openDevDir, cleanDevDir, getStatus }
 
+    // execute-scene-script runs inside the Scene process and bypasses the
+    // Inspector's normal undo/dirty path. Wrap structural edits in an editor
+    // recording so they are persisted by scene_save_scene and can be undone.
+    async function runSceneMutation(method, args, recordUuids) {
+        var undoId = await msg('scene', 'begin-recording', recordUuids);
+        try {
+            var result = await msg('scene', 'execute-scene-script', {
+                name: 'cocos-mcp',
+                method: method,
+                args: [args],
+            });
+            await msg('scene', 'end-recording', undoId);
+            return result;
+        } catch (error) {
+            if (undoId) await msg('scene', 'cancel-recording', undoId);
+            throw error;
+        }
+    }
+
     return [
         // ── scene 域 ──
         {
@@ -52,11 +71,7 @@ function defineTools(ctx) {
                 required: ['parentUuid', 'name'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-scene-script', {
-                    name: 'cocos-mcp',
-                    method: 'addNode',
-                    args: [args],
-                });
+                return await runSceneMutation('addNode', args, [args.parentUuid]);
             },
         },
         {
@@ -77,11 +92,7 @@ function defineTools(ctx) {
                 required: ['sourceUuid', 'parentUuid'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-scene-script', {
-                    name: 'cocos-mcp',
-                    method: 'cloneNode',
-                    args: [args],
-                });
+                return await runSceneMutation('cloneNode', args, [args.sourceUuid, args.parentUuid]);
             },
         },
         {
@@ -93,11 +104,7 @@ function defineTools(ctx) {
                 required: ['uuid'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-scene-script', {
-                    name: 'cocos-mcp',
-                    method: 'removeNode',
-                    args: [args],
-                });
+                return await runSceneMutation('removeNode', args, [args.uuid]);
             },
         },
         {
@@ -116,11 +123,7 @@ function defineTools(ctx) {
                 required: ['uuid', 'parentUuid'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-scene-script', {
-                    name: 'cocos-mcp',
-                    method: 'reparentNode',
-                    args: [args],
-                });
+                return await runSceneMutation('reparentNode', args, [args.uuid, args.parentUuid]);
             },
         },
         {
@@ -135,11 +138,7 @@ function defineTools(ctx) {
                 required: ['uuid', 'component'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-scene-script', {
-                    name: 'cocos-mcp',
-                    method: 'removeComponent',
-                    args: [args],
-                });
+                return await runSceneMutation('removeComponent', args, [args.uuid]);
             },
         },
         {

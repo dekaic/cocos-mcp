@@ -29,10 +29,16 @@ test('scene node tools route through the cocos-mcp scene script', async () => {
         const tool = tools.find((item) => item.name === name);
         assert.ok(tool, name + ' is registered');
         assert.equal(await tool.handler(args), 'ok');
-        assert.deepEqual(calls.pop(), [
-            'scene',
-            'execute-scene-script',
-            { name: 'cocos-mcp', method, args: [args] },
+        assert.deepEqual(calls.splice(-3), [
+            ['scene', 'begin-recording', name === 'scene_add_node'
+                ? ['parent']
+                : name === 'scene_clone_node'
+                    ? ['source', 'parent']
+                    : name === 'scene_reparent_node'
+                        ? ['child', 'parent']
+                        : ['child']],
+            ['scene', 'execute-scene-script', { name: 'cocos-mcp', method, args: [args] }],
+            ['scene', 'end-recording', 'ok'],
         ]);
     }
 });

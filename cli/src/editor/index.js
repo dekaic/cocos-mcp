@@ -113,11 +113,15 @@ function editPrefab(filePath, ops, options) {
 
   const opts = options || {};
 
-  const prefabData = parsePrefab(filePath);
+  const prefabData = parsePrefab(filePath, { rootType: opts.rootType });
   prefabData.resolverStartPath = opts.projectRoot || filePath;
 
   const dryRun = !!opts.dryRun;
   prefabData.dryRun = dryRun;
+  prefabData.rollbackActions = [];
+  prefabData.plannedExternalChanges = [];
+  prefabData.externalChanged = false;
+  const beforeElementsJson = JSON.stringify(prefabData.elements);
   const beforeSnapshot = dryRun
     ? JSON.parse(JSON.stringify(prefabData.elements))
     : null;
@@ -126,28 +130,39 @@ function editPrefab(filePath, ops, options) {
   const affectedNames = [];
 
   let opsApplied = 0;
-  for (const op of ops) {
-    if (!op || typeof op.op !== 'string') {
-      throw new Error(`editPrefab: op 格式错误（缺少 op 字段）: ${JSON.stringify(op)}`);
+  let prefabChanged = false;
+  try {
+    for (const op of ops) {
+      if (!op || typeof op.op !== 'string') {
+        throw new Error(`editPrefab: op 格式错误（缺少 op 字段）: ${JSON.stringify(op)}`);
+      }
+
+      const handler = OP_HANDLERS[op.op];
+      if (!handler) {
+        throw new Error(
+          `editPrefab: 不支持的 op 类型 "${op.op}"，支持: ${Object.keys(OP_HANDLERS).join(', ')}`
+        );
+      }
+
+      const nodeId = handler(prefabData, op);
+      if (typeof nodeId === 'number' && nodeId >= 0) {
+        affectedIds.add(nodeId);
+      }
+      // bulk-set 0 匹配时返回 -1，跳过 affectedIds
+      opsApplied++;
     }
 
-    const handler = OP_HANDLERS[op.op];
-    if (!handler) {
-      throw new Error(
-        `editPrefab: 不支持的 op 类型 "${op.op}"，支持: ${Object.keys(OP_HANDLERS).join(', ')}`
-      );
+    prefabChanged = JSON.stringify(prefabData.elements) !== beforeElementsJson;
+    if (!dryRun && prefabChanged) {
+      writePrefab(filePath, prefabData.elements, prefabData.raw);
     }
-
-    const nodeId = handler(prefabData, op);
-    if (typeof nodeId === 'number' && nodeId >= 0) {
-      affectedIds.add(nodeId);
+  } catch (error) {
+    // 与 prefab 的延迟落盘保持同样的 batch 原子性：逆序回滚
+    // ensure-meta 等已经发生的外部副作用，且不覆盖原始错误。
+    for (let i = prefabData.rollbackActions.length - 1; i >= 0; i--) {
+      try { prefabData.rollbackActions[i](); } catch (_) {}
     }
-    // bulk-set 0 匹配时返回 -1，跳过 affectedIds
-    opsApplied++;
-  }
-
-  if (!dryRun) {
-    writePrefab(filePath, prefabData.elements, prefabData.raw);
+    throw error;
   }
 
   for (const id of affectedIds) {
@@ -160,7 +175,7 @@ function editPrefab(filePath, ops, options) {
   }
 
   const result = {
-    changed: !dryRun,
+    changed: !dryRun && (prefabChanged || prefabData.externalChanged),
     opsApplied,
     nodesAffected: affectedNames,
   };
@@ -168,6 +183,7 @@ function editPrefab(filePath, ops, options) {
   if (dryRun) {
     result.dryRun = true;
     result.diff = computeDiff(beforeSnapshot, prefabData.elements);
+    result.externalChanges = prefabData.plannedExternalChanges;
   }
 
   return result;

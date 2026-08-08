@@ -1,10 +1,11 @@
 // ============================================================
 // UuidResolver：惰性扫描 assets/ 下所有 .prefab.meta 文件
-// 构建 uuid → prefab 磁盘路径 索引，仅扫描一次后缓存于内存。
+// 构建 uuid → prefab 磁盘路径索引。命中复用缓存，miss 时重扫一次，
+// 以感知长驻 Router 期间新导入的 Prefab。
 //
 // 设计约束：
 //   - 不引入第三方依赖（纯 Node.js fs + path + child_process）
-//   - uuid 索引只扫一次，重复调用复用缓存
+//   - uuid 索引命中时复用缓存，miss 时允许重扫
 //   - 解析失败时明确抛错，不静默降级
 // ============================================================
 
@@ -135,11 +136,18 @@ function getUuidIndex(startPath) {
  * @param {string} uuid       资产 UUID
  * @param {string} startPath  起点路径（宿主 prefab 路径 或 项目根目录），用于推断项目根
  * @returns {string}  prefab 文件绝对路径
- * @throws  uuid 不存在时抛错
+ * @throws  重扫后 uuid 仍不存在时抛错
  */
 function resolveUuidToPath(uuid, startPath) {
-  const index = getUuidIndex(startPath);
-  const result = index.get(uuid);
+  const projectRoot = _findProjectRoot(startPath);
+  let index = getUuidIndex(projectRoot);
+  let result = index.get(uuid);
+
+  if (!result || !fs.existsSync(result)) {
+    index = _buildIndex(projectRoot);
+    _cache.set(projectRoot, index);
+    result = index.get(uuid);
+  }
 
   if (!result) {
     throw new Error(

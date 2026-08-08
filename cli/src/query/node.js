@@ -11,7 +11,9 @@ function queryNode(prefabData, name, opts) {
 
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
-    if (!el || el.__type__ !== 'cc.Node') continue;
+    if (!el) continue;
+    if (prefabData.rootType !== 'cc.AnimationClip' && el.__type__ !== 'cc.Node') continue;
+    if (prefabData.rootType === 'cc.AnimationClip' && el._name === undefined) continue;
 
     const stub = isStub(elements, el);
     let resolvedName = el._name;

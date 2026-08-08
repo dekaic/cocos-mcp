@@ -128,12 +128,20 @@ function resolveNode(prefabData, nodeSelector, opDesc) {
     return { node, nodeId };
   }
 
+  if (typeof nodeSelector === 'number') {
+    nodeSelector = { id: nodeSelector };
+  }
+
   if (nodeSelector && typeof nodeSelector === 'object') {
     if (typeof nodeSelector.id === 'number') {
       const nodeId = nodeSelector.id;
       const node = elements[nodeId];
-      if (!node || node.__type__ !== 'cc.Node') {
-        throw new Error(`editPrefab [${opDesc}]: __id__ ${nodeId} 不是有效 cc.Node`);
+      const valid = prefabData.rootType === 'cc.AnimationClip'
+        ? !!(node && typeof node === 'object')
+        : !!(node && node.__type__ === 'cc.Node');
+      if (!valid) {
+        const expected = prefabData.rootType === 'cc.AnimationClip' ? '动画对象' : 'cc.Node';
+        throw new Error(`editPrefab [${opDesc}]: __id__ ${nodeId} 不是有效 ${expected}`);
       }
       return { node, nodeId };
     }

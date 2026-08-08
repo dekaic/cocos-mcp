@@ -25,6 +25,7 @@ const { resolveNode, isStub } = require('../editor/helpers.js');
 
 function _buildFileIdIndex(nestedElements) {
   const index = new Map();
+  let rootFileId = null;
   for (let i = 0; i < nestedElements.length; i++) {
     const el = nestedElements[i];
     if (!el) continue;
@@ -33,6 +34,9 @@ function _buildFileIdIndex(nestedElements) {
     if (el.__type__ === 'cc.Node' && el._prefab && typeof el._prefab.__id__ === 'number') {
       const pi = nestedElements[el._prefab.__id__];
       if (pi && pi.__type__ === 'cc.PrefabInfo' && typeof pi.fileId === 'string') {
+        if (el._parent === null || el._parent === undefined) {
+          rootFileId = pi.fileId;
+        }
         index.set(pi.fileId, {
           kind: 'nested-node',
           nodeName: el._name || (el._parent ? null : '(root)'),
@@ -56,7 +60,7 @@ function _buildFileIdIndex(nestedElements) {
       }
     }
   }
-  return index;
+  return { index, rootFileId };
 }
 
 function queryOverrides(prefabData, args) {
@@ -79,11 +83,14 @@ function queryOverrides(prefabData, args) {
   const nestedUuid = prefabInfo.asset && prefabInfo.asset.__uuid__;
   let nestedPath = null;
   let fileIdIndex = new Map();
+  let nestedRootFileId = null;
   if (typeof nestedUuid === 'string') {
     try {
       nestedPath = resolveUuidToPath(nestedUuid, prefabData.resolverStartPath);
       const nestedData = parsePrefab(nestedPath);
-      fileIdIndex = _buildFileIdIndex(nestedData.elements);
+      const nestedIndex = _buildFileIdIndex(nestedData.elements);
+      fileIdIndex = nestedIndex.index;
+      nestedRootFileId = nestedIndex.rootFileId;
     } catch (_) {
       // 嵌套 prefab 加载失败不阻断查询，target 会被标 unknown
     }
@@ -101,7 +108,9 @@ function queryOverrides(prefabData, args) {
       const fid = localID[0];
 
       let target;
-      if (fid === stubFileId) {
+      // 节点字段 override 的正确 localID 是子 prefab 根 fileId。
+      // 仍识别旧版写入的 stubFileId，便于诊断历史数据。
+      if (fid === nestedRootFileId || fid === stubFileId) {
         target = { kind: 'stub-node-field', nodeName: node._name || null };
       } else {
         const entry = fileIdIndex.get(fid);

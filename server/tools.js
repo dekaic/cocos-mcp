@@ -9,22 +9,101 @@
 function defineTools(ctx) {
     var msg = ctx.msg;   // async (target, name, ...args) => result
     var local = ctx.local; // { getPreviewUrl, doReimport, doRefreshAssets, doReloadScene, listWorktrees, openDevDir, cleanDevDir, getStatus }
+    var sceneTimeoutMs = Number.isFinite(ctx.sceneTimeoutMs) ? ctx.sceneTimeoutMs : 15000;
+
+    function requireString(args, key) {
+        if (!args || typeof args[key] !== 'string' || args[key].trim().length === 0) {
+            throw new Error(key + ' is required');
+        }
+        return args[key];
+    }
+
+    function sceneRequest(name) {
+        var rest = Array.prototype.slice.call(arguments, 1);
+        var request = Promise.resolve().then(function () {
+            return msg.apply(null, ['scene', name].concat(rest));
+        });
+        return new Promise(function (resolve, reject) {
+            var timer = setTimeout(function () {
+                reject(new Error('scene ' + name + ' timed out after ' + sceneTimeoutMs + 'ms; close any Creator modal and retry'));
+            }, sceneTimeoutMs);
+            request.then(function (value) {
+                clearTimeout(timer);
+                resolve(value);
+            }, function (error) {
+                clearTimeout(timer);
+                reject(error);
+            });
+        });
+    }
+
+    function stripEditorSceneRoots(tree) {
+        if (!tree || !Array.isArray(tree.children)) return tree;
+        var editorRoots = {
+            'Editor Scene Foreground': true,
+            'Editor Scene Background': true,
+        };
+        tree.children = tree.children.filter(function (child) {
+            return !(child && editorRoots[child.name]);
+        });
+        return tree;
+    }
+
+    function readDumpPath(dump, pathText) {
+        var current = dump;
+        var parts = String(pathText).split('.').filter(Boolean);
+        for (var i = 0; i < parts.length; i++) {
+            if (current === null || current === undefined || !Object.prototype.hasOwnProperty.call(current, parts[i])) {
+                return { found: false, value: undefined };
+            }
+            current = current[parts[i]];
+        }
+        return { found: true, value: current };
+    }
+
+    function unwrapDump(value) {
+        if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+            return value.value;
+        }
+        return value;
+    }
+
+    function sameJson(left, right) {
+        return JSON.stringify(left) === JSON.stringify(right);
+    }
+
+    async function queryCurrentSceneAsset() {
+        var state = await sceneRequest('execute-scene-script', {
+            name: 'cocos-mcp',
+            method: 'querySceneState',
+            args: [],
+        });
+        if (!state || !state.uuid) throw new Error('current scene is not loaded');
+        var info = await msg('asset-db', 'query-asset-info', state.uuid);
+        return { state: state, info: info };
+    }
 
     // execute-scene-script runs inside the Scene process and bypasses the
     // Inspector's normal undo/dirty path. Wrap structural edits in an editor
     // recording so they are persisted by scene_save_scene and can be undone.
     async function runSceneMutation(method, args, recordUuids) {
-        var undoId = await msg('scene', 'begin-recording', recordUuids);
+        var undoId = await sceneRequest('begin-recording', recordUuids);
         try {
-            var result = await msg('scene', 'execute-scene-script', {
+            var result = await sceneRequest('execute-scene-script', {
                 name: 'cocos-mcp',
                 method: method,
                 args: [args],
             });
-            await msg('scene', 'end-recording', undoId);
+            await sceneRequest('end-recording', undoId);
             return result;
         } catch (error) {
-            if (undoId) await msg('scene', 'cancel-recording', undoId);
+            if (undoId) {
+                try {
+                    await sceneRequest('cancel-recording', undoId);
+                } catch (_) {
+                    // Keep the mutation failure actionable; cancellation is best-effort cleanup.
+                }
+            }
             throw error;
         }
     }
@@ -39,11 +118,13 @@ function defineTools(ctx) {
                 properties: { uuid: { type: 'string', description: '可选：节点 uuid' } },
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-scene-script', {
+                args = args || {};
+                var tree = await sceneRequest('execute-scene-script', {
                     name: 'cocos-mcp',
                     method: 'queryNodeTree',
                     args: [args.uuid],
                 });
+                return args.uuid ? tree : stripEditorSceneRoots(tree);
             },
         },
         {
@@ -55,7 +136,12 @@ function defineTools(ctx) {
                 required: ['uuid'],
             },
             handler: async function (args) {
-                return await msg('scene', 'query-node', args.uuid);
+                var uuid = requireString(args, 'uuid');
+                var result = await sceneRequest('query-node', uuid);
+                if (result === null || result === undefined) {
+                    throw new Error('node not found: ' + uuid);
+                }
+                return result;
             },
         },
         {
@@ -75,6 +161,8 @@ function defineTools(ctx) {
                 required: ['parentUuid', 'name'],
             },
             handler: async function (args) {
+                requireString(args, 'parentUuid');
+                requireString(args, 'name');
                 return await runSceneMutation('addNode', args, [args.parentUuid]);
             },
         },
@@ -96,6 +184,8 @@ function defineTools(ctx) {
                 required: ['sourceUuid', 'parentUuid'],
             },
             handler: async function (args) {
+                requireString(args, 'sourceUuid');
+                requireString(args, 'parentUuid');
                 return await runSceneMutation('cloneNode', args, [args.sourceUuid, args.parentUuid]);
             },
         },
@@ -108,6 +198,7 @@ function defineTools(ctx) {
                 required: ['uuid'],
             },
             handler: async function (args) {
+                requireString(args, 'uuid');
                 return await runSceneMutation('removeNode', args, [args.uuid]);
             },
         },
@@ -127,6 +218,8 @@ function defineTools(ctx) {
                 required: ['uuid', 'parentUuid'],
             },
             handler: async function (args) {
+                requireString(args, 'uuid');
+                requireString(args, 'parentUuid');
                 return await runSceneMutation('reparentNode', args, [args.uuid, args.parentUuid]);
             },
         },
@@ -142,6 +235,8 @@ function defineTools(ctx) {
                 required: ['uuid', 'component'],
             },
             handler: async function (args) {
+                requireString(args, 'uuid');
+                requireString(args, 'component');
                 return await runSceneMutation('removeComponent', args, [args.uuid]);
             },
         },
@@ -157,10 +252,9 @@ function defineTools(ctx) {
                 required: ['uuid', 'component'],
             },
             handler: async function (args) {
-                return await msg('scene', 'create-component', {
-                    uuid: args.uuid,
-                    component: args.component,
-                });
+                var uuid = requireString(args, 'uuid');
+                requireString(args, 'component');
+                return await runSceneMutation('createComponent', args, [uuid]);
             },
         },
         {
@@ -176,11 +270,38 @@ function defineTools(ctx) {
                 required: ['uuid', 'path', 'dump'],
             },
             handler: async function (args) {
-                return await msg('scene', 'set-property', {
-                    uuid: args.uuid,
-                    path: args.path,
+                if (!args || !args.dump || typeof args.dump !== 'object') throw new Error('dump is required');
+                var uuid = requireString(args, 'uuid');
+                var propertyPath = requireString(args, 'path');
+                var beforeDump = await sceneRequest('query-node', uuid);
+                if (!beforeDump) throw new Error('node not found: ' + uuid);
+                var beforeEntry = readDumpPath(beforeDump, propertyPath);
+                if (!beforeEntry.found) throw new Error('property path not found: ' + propertyPath);
+                await sceneRequest('set-property', {
+                    uuid: uuid,
+                    path: propertyPath,
                     dump: args.dump,
                 });
+                var afterDump = await sceneRequest('query-node', uuid);
+                if (!afterDump) throw new Error('node disappeared after set-property: ' + uuid);
+                var afterEntry = readDumpPath(afterDump, propertyPath);
+                if (!afterEntry.found) throw new Error('property path disappeared after mutation: ' + propertyPath);
+                var before = unwrapDump(beforeEntry.value);
+                var after = unwrapDump(afterEntry.value);
+                var expected = unwrapDump(args.dump);
+                if (!sameJson(after, expected)) {
+                    throw new Error(
+                        'set-property postcondition failed for ' + propertyPath +
+                        ': expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(after)
+                    );
+                }
+                return {
+                    changed: !sameJson(before, after),
+                    target: uuid,
+                    path: propertyPath,
+                    before: before,
+                    after: after,
+                };
             },
         },
         {
@@ -192,7 +313,13 @@ function defineTools(ctx) {
                 required: ['uuid'],
             },
             handler: async function (args) {
-                return await msg('scene', 'open-scene', args.uuid);
+                var uuid = requireString(args, 'uuid');
+                var info = await msg('asset-db', 'query-asset-info', uuid);
+                if (!info) throw new Error('scene asset not found: ' + uuid);
+                if (info.type && info.type !== 'cc.SceneAsset') {
+                    throw new Error('asset is not a cc.SceneAsset: ' + uuid + ' (' + info.type + ')');
+                }
+                return await sceneRequest('open-scene', uuid);
             },
         },
         {
@@ -200,7 +327,11 @@ function defineTools(ctx) {
             description: '保存当前场景',
             inputSchema: { type: 'object', properties: {} },
             handler: async function () {
-                return await msg('scene', 'save-scene');
+                var current = await queryCurrentSceneAsset();
+                if (!current.info) {
+                    throw new Error('untitled scene cannot be saved through MCP; save it in Creator first');
+                }
+                return await sceneRequest('save-scene');
             },
         },
         {
@@ -208,12 +339,12 @@ function defineTools(ctx) {
             description: '软重载场景（不清编辑器状态）',
             inputSchema: { type: 'object', properties: {} },
             handler: async function () {
-                return await msg('scene', 'soft-reload');
+                return await sceneRequest('soft-reload');
             },
         },
         {
             name: 'scene_execute_component_method',
-            description: '调用指定节点组件上的方法',
+            description: '调用指定组件 UUID 上的方法；会校验组件和方法存在，并通过 undo recording 执行。',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -224,11 +355,14 @@ function defineTools(ctx) {
                 required: ['uuid', 'name'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-component-method', {
-                    uuid: args.uuid,
+                var uuid = requireString(args, 'uuid');
+                requireString(args, 'name');
+                if (args.args !== undefined && !Array.isArray(args.args)) throw new Error('args must be an array');
+                return await runSceneMutation('executeComponentMethod', {
+                    uuid: uuid,
                     name: args.name,
                     args: args.args || [],
-                });
+                }, [uuid]);
             },
         },
 
@@ -262,7 +396,10 @@ function defineTools(ctx) {
                 required: ['urlOrUUID'],
             },
             handler: async function (args) {
-                return await msg('asset-db', 'query-asset-info', args.urlOrUUID);
+                var key = requireString(args, 'urlOrUUID');
+                var info = await msg('asset-db', 'query-asset-info', key);
+                if (!info) throw new Error('asset not found: ' + key);
+                return info;
             },
         },
         {
@@ -274,7 +411,10 @@ function defineTools(ctx) {
                 required: ['uuid'],
             },
             handler: async function (args) {
-                return await msg('asset-db', 'query-url', args.uuid);
+                var uuid = requireString(args, 'uuid');
+                var url = await msg('asset-db', 'query-url', uuid);
+                if (!url) throw new Error('asset url not found for uuid: ' + uuid);
+                return url;
             },
         },
         {
@@ -286,7 +426,10 @@ function defineTools(ctx) {
                 required: ['url'],
             },
             handler: async function (args) {
-                return await msg('asset-db', 'query-uuid', args.url);
+                var url = requireString(args, 'url');
+                var uuid = await msg('asset-db', 'query-uuid', url);
+                if (!uuid) throw new Error('asset uuid not found for url: ' + url);
+                return uuid;
             },
         },
         {
@@ -325,7 +468,16 @@ function defineTools(ctx) {
                 required: ['url', 'content'],
             },
             handler: async function (args) {
-                return await msg('asset-db', 'create-asset', args.url, args.content, { overwrite: !!args.overwrite });
+                var url = requireString(args, 'url');
+                if (typeof args.content !== 'string') throw new Error('content is required');
+                var existing = await msg('asset-db', 'query-asset-info', url);
+                if (existing && !args.overwrite) {
+                    throw new Error('asset already exists: ' + url + '; pass overwrite=true to replace it');
+                }
+                var result = await msg('asset-db', 'create-asset', url, args.content, { overwrite: !!args.overwrite });
+                var asset = await msg('asset-db', 'query-asset-info', url);
+                if (!asset) throw new Error('asset create postcondition failed: ' + url);
+                return { created: !existing, overwritten: !!existing, asset: asset || result };
             },
         },
         {

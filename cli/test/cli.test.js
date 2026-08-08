@@ -1,16 +1,5 @@
 'use strict';
 
-// ============================================================
-// T10/T11 CLI 集成测试
-// 用 child_process.spawnSync 跑 bin，覆盖：
-//   - query tree
-//   - query node --name X
-//   - query find --type cc.Label
-//   - set label.text
-//   - set active
-//   - batch
-// ============================================================
-
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('child_process');
@@ -18,8 +7,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const { parsePrefab } = require('../src/parse.js');
+const { createFixtureProject } = require('./helpers/fixture-project.js');
+
 const BIN = path.resolve(__dirname, '../bin/cocos-mcp-cli.js');
-const FIXTURE = path.resolve(__dirname, 'fixtures/HomeUI.prefab');
 
 function run(args) {
   return spawnSync(process.execPath, [BIN, ...args], {
@@ -28,189 +19,140 @@ function run(args) {
   });
 }
 
-function tmpCopy() {
-  const dest = path.join(os.tmpdir(), `HomeUI-cli-test-${Date.now()}.prefab`);
-  fs.copyFileSync(FIXTURE, dest);
-  return dest;
-}
+test('CLI query: tree/node/find/field 返回可解析结果', (t) => {
+  const fixture = createFixtureProject(t, 'cli-query');
 
-// ─── query tree ──────────────────────────────────────────────
+  const treeResult = run(['query', fixture.hostPath, '--selector', 'tree']);
+  assert.equal(treeResult.status, 0, treeResult.stderr);
+  assert.equal(JSON.parse(treeResult.stdout).name, fixture.names.root);
 
-test('CLI query tree: 退出码 0，输出可解析 JSON，含 name=HomeUI 的根节点', () => {
-  const result = run(['query', FIXTURE, '--selector', 'tree']);
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  const nodeResult = run([
+    'query', fixture.hostPath,
+    '--selector', 'node',
+    '--name', fixture.names.plain,
+  ]);
+  assert.equal(nodeResult.status, 0, nodeResult.stderr);
+  assert.equal(JSON.parse(nodeResult.stdout).name, fixture.names.plain);
 
-  let tree;
-  assert.doesNotThrow(() => { tree = JSON.parse(result.stdout); }, 'stdout 应是合法 JSON');
-  assert.equal(tree.name, 'HomeUI', '根节点名称应为 HomeUI');
-  assert.ok(Array.isArray(tree.children), 'tree.children 应是数组');
+  const findResult = run([
+    'query', fixture.hostPath,
+    '--selector', 'find',
+    '--type', 'cc.Label',
+  ]);
+  assert.equal(findResult.status, 0, findResult.stderr);
+  assert.equal(JSON.parse(findResult.stdout).length, 1);
+
+  const fieldResult = run([
+    'query', fixture.hostPath,
+    '--selector', 'field',
+    '--name', fixture.names.label,
+    '--comp', 'cc.Label',
+    '--field', '_string',
+  ]);
+  assert.equal(fieldResult.status, 0, fieldResult.stderr);
+  assert.equal(JSON.parse(fieldResult.stdout), 'Start');
 });
 
-// ─── query node ──────────────────────────────────────────────
+test('CLI query overrides: 能解析自包含 nested Prefab', (t) => {
+  const fixture = createFixtureProject(t, 'cli-overrides');
+  const result = run([
+    'query', fixture.hostPath,
+    '--selector', 'overrides',
+    '--name', fixture.names.nested,
+  ]);
 
-test('CLI query node --name touchArea: 返回单节点详情', () => {
-  const result = run(['query', FIXTURE, '--selector', 'node', '--name', 'touchArea']);
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
-
-  let node;
-  assert.doesNotThrow(() => { node = JSON.parse(result.stdout); });
-  assert.equal(node.name, 'touchArea');
-  assert.ok(typeof node.id === 'number');
-});
-
-test('CLI query node --name 不存在: 返回 null JSON', () => {
-  const result = run(['query', FIXTURE, '--selector', 'node', '--name', '__no_such_node__']);
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed, null);
+  assert.equal(parsed.nestedPrefab, fixture.nestedPath);
+  assert.equal(parsed.propertyOverrides.length, 2);
 });
 
-// ─── query find ──────────────────────────────────────────────
+test('CLI set: label.text 与 active 会真实写入 Prefab', (t) => {
+  const fixture = createFixtureProject(t, 'cli-set');
 
-test('CLI query find --type cc.Label: 返回 id 数组', () => {
-  const result = run(['query', FIXTURE, '--selector', 'find', '--type', 'cc.Label']);
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  const labelResult = run([
+    'set', fixture.hostPath, fixture.names.label, 'label.text', 'Updated',
+  ]);
+  assert.equal(labelResult.status, 0, labelResult.stderr);
 
-  let ids;
-  assert.doesNotThrow(() => { ids = JSON.parse(result.stdout); });
-  assert.ok(Array.isArray(ids));
-  // HomeUI 里有至少一个 cc.Label（具体数量依 fixture）
-  assert.ok(ids.length >= 0, '应返回数组');
+  const activeResult = run([
+    'set', fixture.hostPath, fixture.names.plain, 'active', 'false',
+  ]);
+  assert.equal(activeResult.status, 0, activeResult.stderr);
+
+  const parsed = parsePrefab(fixture.hostPath);
+  const labelNode = parsed.findNodeByName(fixture.names.label);
+  const label = parsed.elements[labelNode._components[0].__id__];
+  assert.equal(label._string, 'Updated');
+  assert.equal(parsed.findNodeByName(fixture.names.plain)._active, false);
 });
 
-// ─── set label.text ──────────────────────────────────────────
-
-test('CLI set label.text: 写入后 query node 验证文字已变', () => {
-  const tmp = tmpCopy();
-
-  // 先 query 找到含 cc.Label 的节点名
-  const findResult = run(['query', tmp, '--selector', 'find', '--type', 'cc.Label']);
-  assert.equal(findResult.status, 0);
-  const labelIds = JSON.parse(findResult.stdout);
-
-  if (labelIds.length === 0) {
-    // fixture 无 Label 节点，跳过
-    fs.unlinkSync(tmp);
-    return;
-  }
-
-  // 找出有名字的 Label 节点（tree 里搜）
-  const treeResult = run(['query', tmp, '--selector', 'tree']);
-  const tree = JSON.parse(treeResult.stdout);
-
-  // 深度遍历找第一个带 cc.Label 组件且有名字的节点
-  function findLabelNode(node) {
-    if (node.componentTypes && node.componentTypes.includes('cc.Label') && node.name) return node;
-    for (const child of (node.children || [])) {
-      const found = findLabelNode(child);
-      if (found) return found;
-    }
-    return null;
-  }
-  const labelNode = findLabelNode(tree);
-  if (!labelNode) {
-    fs.unlinkSync(tmp);
-    return; // 没有带名字的 Label 节点，跳过
-  }
-
-  const newText = 'CLI_TEST_' + Date.now();
-  const setResult = run(['set', tmp, labelNode.name, 'label.text', newText]);
-  assert.equal(setResult.status, 0, `set 失败 stderr: ${setResult.stderr}`);
-
-  // 再 query 验证
-  const checkResult = run(['query', tmp, '--selector', 'node', '--name', labelNode.name]);
-  assert.equal(checkResult.status, 0);
-  // 成功即可（文字字段在 raw 里，高层 query 不直接返回 _string，只验证退出码即可）
-
-  fs.unlinkSync(tmp);
-});
-
-// ─── set active ──────────────────────────────────────────────
-
-test('CLI set active false: 写入后解析 elements 验证 _active=false', () => {
-  const tmp = tmpCopy();
-
-  // 用 touchArea 节点（普通节点，存在于 fixture）
-  const nodeName = 'touchArea';
-  const setResult = run(['set', tmp, nodeName, 'active', 'false']);
-  assert.equal(setResult.status, 0, `set active 失败 stderr: ${setResult.stderr}`);
-
-  // 直接用 parse.js 验证（不走 CLI 避免嵌套）
-  const { parsePrefab } = require('../src/parse.js');
-  const pd = parsePrefab(tmp);
-  const node = pd.findNodeByName(nodeName);
-  assert.ok(node, `${nodeName} 应存在`);
-  assert.equal(node._active, false, '_active 应已改为 false');
-
-  fs.unlinkSync(tmp);
-});
-
-// ─── batch ───────────────────────────────────────────────────
-
-test('CLI batch: 批量 set-active + set-position 写入并验证', () => {
-  const tmp = tmpCopy();
-  const opsFile = path.join(os.tmpdir(), `ops-${Date.now()}.json`);
-
+test('CLI batch: dry-run 不落盘，正式执行应用全部 op', (t) => {
+  const fixture = createFixtureProject(t, 'cli-batch');
+  const opsPath = path.join(fixture.root, 'ops.json');
   const ops = [
-    { op: 'set-active', node: 'touchArea', active: false },
-    { op: 'set-position', node: 'touchArea', x: 111, y: 222, z: 0 },
+    { op: 'set-active', node: fixture.names.plain, active: false },
+    { op: 'set-position', node: fixture.names.plain, x: 111, y: 222, z: 3 },
   ];
-  fs.writeFileSync(opsFile, JSON.stringify(ops));
+  fs.writeFileSync(opsPath, JSON.stringify(ops), 'utf8');
+  const before = fs.readFileSync(fixture.hostPath, 'utf8');
 
-  const batchResult = run(['batch', tmp, opsFile]);
-  assert.equal(batchResult.status, 0, `batch 失败 stderr: ${batchResult.stderr}`);
+  const dryRun = run(['batch', fixture.hostPath, opsPath, '--dry-run']);
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  assert.equal(JSON.parse(dryRun.stdout).dryRun, true);
+  assert.equal(fs.readFileSync(fixture.hostPath, 'utf8'), before);
 
-  // 验证
-  const { parsePrefab } = require('../src/parse.js');
-  const pd = parsePrefab(tmp);
-  const node = pd.findNodeByName('touchArea');
-  assert.ok(node);
+  const applied = run(['batch', fixture.hostPath, opsPath]);
+  assert.equal(applied.status, 0, applied.stderr);
+  const node = parsePrefab(fixture.hostPath).findNodeByName(fixture.names.plain);
   assert.equal(node._active, false);
-  assert.equal(node._lpos.x, 111);
-  assert.equal(node._lpos.y, 222);
-
-  fs.unlinkSync(tmp);
-  fs.unlinkSync(opsFile);
+  assert.deepEqual(
+    { x: node._lpos.x, y: node._lpos.y, z: node._lpos.z },
+    { x: 111, y: 222, z: 3 }
+  );
 });
 
-// ─── 错误处理 ─────────────────────────────────────────────────
+test('CLI 错误路径: 缺失文件、未知命令和非法布尔值均给出真实错误', (t) => {
+  const fixture = createFixtureProject(t, 'cli-errors');
 
-test('CLI 未知子命令: 非零退出 + stderr 有内容', () => {
-  const result = run(['unknowncmd']);
-  assert.notEqual(result.status, 0);
-  assert.ok(result.stderr.length > 0);
+  const unknown = run(['unknowncmd']);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /未知子命令/);
+
+  const missing = run(['query', path.join(fixture.root, 'missing.prefab')]);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /文件不存在/);
+
+  const invalid = run([
+    'set', fixture.hostPath, fixture.names.plain, 'active', 'maybe',
+  ]);
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /value 必须是 true 或 false/);
 });
 
-test('CLI query 文件不存在: 非零退出', () => {
-  const result = run(['query', '/tmp/__nonexistent__.prefab']);
-  assert.notEqual(result.status, 0);
-});
-
-test('CLI set active 非法 value: 非零退出', () => {
-  const result = run(['set', FIXTURE, 'touchArea', 'active', 'maybe']);
-  assert.notEqual(result.status, 0);
-});
-test('CLI open --dry-run: accepts positional project and builds --project command', () => {
+test('CLI open --dry-run: positional project 生成无登录启动命令', (t) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-open-project-'));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   fs.mkdirSync(path.join(project, 'assets'));
 
   const result = run(['open', project, '--cocos', process.execPath, '--dry-run']);
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /\[dry-run\]/);
   assert.match(result.stdout, /--project/);
   assert.match(result.stdout, /--nologin/);
   assert.match(result.stdout, new RegExp(project.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')));
-
-  fs.rmSync(project, { recursive: true, force: true });
 });
 
-test('CLI open --with-login: dry-run omits --nologin', () => {
+test('CLI open --with-login: dry-run 不添加 --nologin', (t) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-open-project-'));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   fs.mkdirSync(path.join(project, 'assets'));
 
-  const result = run(['open', '--project', project, '--cocos', process.execPath, '--with-login', '--dry-run']);
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+  const result = run([
+    'open', '--project', project,
+    '--cocos', process.execPath,
+    '--with-login', '--dry-run',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /--nologin/);
-
-  fs.rmSync(project, { recursive: true, force: true });
 });

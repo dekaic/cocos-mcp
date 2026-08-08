@@ -37,7 +37,12 @@ function execSetComponentField(prefabData, op) {
     );
   }
 
-  const comp = findComponent(elements, node, componentType);
+  // .anim 的根对象本身就是 cc.AnimationClip，没有 cc.Node._components
+  // 包装层。anim batch 仍沿用现有 set-component-field 格式，
+  // 在这种资产根对象上直接修改字段。
+  const comp = node.__type__ === componentType
+    ? node
+    : findComponent(elements, node, componentType);
   if (!comp) {
     throw new Error(
       `editPrefab [set-component-field]: 节点 "${node._name}" 上找不到 ${componentType} 组件`

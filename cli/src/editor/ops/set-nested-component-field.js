@@ -10,7 +10,7 @@
 'use strict';
 
 const { normalizeComponentType, isStub, resolveNode } = require('../helpers.js');
-const { getNestedCompFileId, setStubCompOverride } = require('../nested.js');
+const { resolveLocalIdChain, setStubCompOverride } = require('../nested.js');
 
 function execSetNestedComponentField(prefabData, op) {
   const { elements } = prefabData;
@@ -41,11 +41,11 @@ function execSetNestedComponentField(prefabData, op) {
     );
   }
 
-  const compFileId = getNestedCompFileId(
+  const localIdChain = resolveLocalIdChain(
     prefabData.resolverStartPath, elements, nodeId, componentType, subNode
   );
   const propertyPath = Array.isArray(property) ? property : [property];
-  setStubCompOverride(prefabData, nodeId, compFileId, propertyPath, value);
+  setStubCompOverride(prefabData, nodeId, localIdChain, propertyPath, value);
   return nodeId;
 }
 

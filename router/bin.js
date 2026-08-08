@@ -29,6 +29,7 @@ var http = require('http');
 
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
+var toolListSignature = require('./src/tool-list-signature.js').toolListSignature;
 
 var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
@@ -139,7 +140,7 @@ function sanitizeShortName(name) {
 async function discover() {
     var entries = scanRegistry();
     var seen = new Set();
-    var beforeSig = toolListSignature();   // 改动前的工具签名，末尾比对决定是否通知 claude
+    var beforeSig = toolListSignature(editors.values());   // 改动前的工具签名，末尾比对决定是否通知 claude
     for (var i = 0; i < entries.length; i++) {
         var info = entries[i];
         var key = info.url;
@@ -178,22 +179,12 @@ async function discover() {
     }
     // shortName 撞名去重（多编辑器 projectShortName 相同时，否则 tool 前缀冲突会把请求路由到错的编辑器）
     dedupeShortNames();
-    // 工具列表变化（编辑器增减 / 某编辑器工具数从不全变全）→ 通知 claude 重新拉 tools/list。
+    // 工具列表变化（编辑器增减 / 工具名、描述或 schema 变化）→ 通知 claude 重新拉 tools/list。
     // 否则 claude 停在初次 tools/list 的旧快照：editor 慢启动时初次只暴露 router 自带工具，
     // 后激活的 forest__ 业务工具 claude 永远拿不到（capabilities.tools.listChanged 声明了但从不真发是历史 bug）。
-    if (toolListSignature() !== beforeSig) {
+    if (toolListSignature(editors.values()) !== beforeSig) {
         notifyToolsChanged();
     }
-}
-
-/** 工具列表签名：editors 的 shortName:工具数 排序拼接。变化即代表暴露给 claude 的聚合工具列表变了。 */
-function toolListSignature() {
-    var parts = [];
-    for (var ed of editors.values()) {
-        parts.push(ed.shortName + ':' + ed.tools.length);
-    }
-    parts.sort();
-    return parts.join('|');
 }
 
 /** 标记 claude 已完成 MCP initialize 握手——之前发 list_changed 没意义（client 尚未就绪）。 */

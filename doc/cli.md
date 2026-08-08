@@ -25,7 +25,7 @@ prefab 是 JSON 数组，`__id__` 是数组下标，字符串替换会破坏所�
 **不适用 / 已知限制**：
 
 - 多层嵌套 stub（stub 内还有 stub）：CLI 支持 `refSubNode` 字符串数组路径，但更深层场景仍建议走 tools pipeline（`tools/step-3-script/bind-prefab-components.ts`）
-- 改 `.anim` 文件里的 AnimationClip / Track / Curve 结构：用 `cli/src/anim-primitives.js` 在脚本中处理，不通过 op
+- 改 `.anim` 的 Track / Curve 结构：用 `cli/src/anim-primitives.js` 在脚本中处理。AnimationClip 顶层字段可用 `set-component-field`。release 使用前必须在 Creator 功能裁剪中启用 Animation
 - 脚本组件本身在 stub 内挂载（`mountedComponents`）的 @property 绑定：CLI 会抛错
 
 ---
@@ -93,6 +93,7 @@ cocos-mcp-cli create-prefab <out> [--name N] [--width W] [--height H]
                                   [--add-spine <skel-uuid>] [--dry-run]
 cocos-mcp-cli extract-prefab <src> <out> --node <selector> [--name X] [--dry-run]
 cocos-mcp-cli compact-prefab <prefab> [--dry-run]
+cocos-mcp-cli build --project <root> --config <json> [--creator <bin>] [--strict]
 ```
 
 ### query
@@ -105,7 +106,7 @@ cocos-mcp-cli compact-prefab <prefab> [--dry-run]
 | `field` | 单组件单字段值（输出原始 JSON，方便 `jq` 管道） | `--name --comp --field` |
 | `overrides` | 列 stub 节点当前所有 propertyOverrides + 关联 root targetOverrides | `--id N` / `--path A/B/C` / `--name <name>` |
 
-`--with-comps`：`tree` / `node` 下展开节点的所有组件字段（输出 `components: [{type, id, fields}]`）。不带这个 flag 只输出 `componentTypes` 类型名列表。
+`--with-comps`：`tree` / `node` 下展开节点的所有组件字段（输出 `components: [{type, id, fields}]`）。不带这个 flag 只输出 `componentTypes` 类型名列表。`--type` / `--comp` 既接受序列化 classId，也接受 `@ccclass` 名称；CLI 会用项目 `.ts.meta` 解析。
 
 `overrides` 输出每条 override 的落点 `target.kind`：
 - `stub-node-field` — stub 节点自身字段（_lpos / _name / _lscale 等）
@@ -135,12 +136,18 @@ node bin/cocos-mcp-cli.js batch /tmp/ops.json \
 
 ### anim
 
-`.anim` 与 `.prefab` 同为 JSON 数组 + `__id__` 引用格式，复用 `editPrefab`。op 主要面向 cc.Node 树。改 AnimationClip / Track / Curve 结构请用 `cli/src/anim-primitives.js` 在脚本中处理。
+`.anim` 与 `.prefab` 同为 JSON 数组 + `__id__` 引用格式。标准 `cc.AnimationClip` 资产头可直接用 `anim query` 查 tree/node/find/field，并用 `anim batch` + `set-component-field` 修改顶层字段或 `{id:N}` 动画对象。Track / Curve 结构仍请用 `cli/src/anim-primitives.js`。
+
+CLI 只负责资产结构；运行时反序列化还依赖 Creator 引擎模块。若 `settings/v2/packages/engine.json` 关闭 `animation`，命令会在 stderr 警告，release 运行可能报 Error 5302。请在「项目设置 → 功能裁剪」启用 Animation 后重新构建。该组合已在 Creator 3.8.8 web-mobile release 中实际加载验证。
 
 ```bash
 node bin/cocos-mcp-cli.js anim query my.anim --selector tree
 node bin/cocos-mcp-cli.js anim batch my.anim ops.json --dry-run
 ```
+
+### build
+
+`build` 调用 Creator CLI，并核对本次构建开始后生成的入口、settings 与产物目录。Creator 3.8.8 偶尔会在 Builder 已成功后返回非零进程码；只有新鲜产物完整且 settings JSON 可解析时 CLI 才接受该结果。`--strict` 还会在 Creator 返回 0 时强制执行同样的产物验证，因此历史残留 build 不会被误报为本次成功。
 
 ### diff
 
@@ -160,7 +167,7 @@ node bin/cocos-mcp-cli.js diff old.prefab new.prefab
 
 从零创建一个新 prefab + 配套 `.prefab.meta`。`output-path` 不带 `.prefab` 后缀会自动补全。
 
-`uuid` / `fileId` 走 `deterministicUUID` / `deterministicFileId` 以 `create-prefab:<name>` 为种子推导：**同名 prefab 每次生成相同 UUID**，可重入。
+`uuid` / `fileId` 走 `deterministicUUID` / `deterministicFileId`。项目内以规范化的项目相对路径 + 名称为种子：同路径可稳定重放，不同路径的同名 Prefab 不会 UUID 冲突，复制到另一机器/worktree 也不会漂移。
 
 | flag | 默认 | 说明 |
 |---|---|---|
@@ -212,6 +219,8 @@ done
 
 从源 prefab 里抠出一个子节点的完整闭包，写成新独立 prefab。
 
+直接把 nested prefab stub 根当作提取根没有足够的本地对象闭包，命令会明确拒绝；应从该 stub 的源 prefab 提取，或先把实例还原为普通节点。
+
 | flag | 说明 |
 |---|---|
 | `<src>` | 源 prefab 路径 |
@@ -222,13 +231,14 @@ done
 
 闭包收集规则（`cli/src/cli/extract-cmd.js`）：
 - 从 srcNode 开始递归走所有字段，遇 `{__id__: N}` 把 N 加入闭包队列
-- 跳过 `_parent`（反向引用会把父链/兄弟拖进闭包，破坏「只提子树」语义）
+- 跳过 `_parent`、本地 `PrefabInfo.root/asset/targetOverrides` 与 `PrefabInstance.prefabRootNode` 这些宿主反向链，防止父链、兄弟和第二个 Prefab 头被拖入
 - 闭包内元素按原 idx 升序拷贝到新数组（srcNode 永远是 idx 1）
+- 旧宿主根 `targetOverrides` 另行筛选：`source` 组件和 `target` 节点都在子树内才迁移并重映射，任一端在子树外则丢弃
 
 输出语义：
 - 新 root: `_parent = null`，`_name = newName`
-- 新 root 的 PrefabInfo: `root → {__id__: 1}`, `asset → {__id__: 0}`, 清掉 `instance / targetOverrides / nestedPrefabInstanceRoots`（这些字段在源里是相对宿主的，独立 prefab 不需要）
-- meta uuid: 走 `deterministicUUID(extract-prefab:<outPath>:<newName>:uuid)`，**同 src+out+name 每次同 uuid**
+- 新 root 的 PrefabInfo: `root → {__id__: 1}`, `asset → {__id__: 0}`；清掉旧 `instance`，重建 `nestedPrefabInstanceRoots`，并挂回筛选后的 `targetOverrides`
+- meta uuid: 走规范化输出路径 + `newName` 的 `deterministicUUID`；同一输出文件用绝对/相对路径调用也会稳定重放，seed 不包含 src
 
 例：从 HomeBottom 提取 btnTask 为独立 BottomEntry.prefab
 ```bash
@@ -310,7 +320,7 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 
 ## 6. Op 全表
 
-26 个 op，按场景分组。`node` / `parent` / `source` / `target` 均支持上面三种定位形式。
+34 个 op，按场景分组。`node` / `parent` / `source` / `target` 均支持节点名、直接数字 id、`{id:N}` 或 `{path:"A/B"}`。
 
 ### 6.1 节点字段
 
@@ -331,7 +341,7 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 | `set-component-enabled` | `node`, `componentType`, `enabled`, `subNode?` | 改组件 `_enabled`，stub 走 propertyOverrides |
 | `set-nested-component-field` | `node`（stub）, `componentType`, `property`, `value`, `subNode?` | **stub 节点**改内部任意组件的任意字段。`property` 支持字符串或嵌套路径数组。SpriteFrame 等资源 `value` 自备 `{__uuid__,__expectedType__}` |
 | `reset-overrides` | `node`（stub）, `property?`, `componentType?`, `subNode?`, `all?` | 清 stub 已写入的 propertyOverrides。`all: true` 清空整个数组（一键回滚到嵌套默认）；`property` 单条匹配——无 componentType = 节点字段（_lpos / _name 等），有 componentType = 嵌套内组件字段。幂等 |
-| `ensure-meta` | `path` | 给 `.ts` / `.json` 文件创建 `.meta`（v4 uuid + 按扩展名选模板）。`path` 可绝对或相对项目根。已存在时幂等。**典型用法**：新建脚本 → `ensure-meta` → `add-component` 同 batch 内联动，免等 cocos 编辑器异步 import。dry-run 时不写盘。同 batch 内自动 invalidate classid-resolver cache，让后续 op 能查到新 className |
+| `ensure-meta` | `path` | 给 `.ts` / `.json` 文件创建 `.meta`（确定性 v4 uuid + 按扩展名选模板）。`path` 可绝对或相对项目根；项目内同一规范化路径可稳定重放。已存在时幂等且同样 invalidate classid-resolver cache。dry-run 不写盘，但 `externalChanges` 返回与 apply 相同的计划 meta/uuid；新建 meta 后若后续 op 失败，该 meta 随 batch 回滚 |
 
 ### 6.3 cc.UITransform 便捷
 
@@ -764,7 +774,7 @@ extensions/cocos-mcp/cli/
     │   ├── id-utils.js          # fileId 分配 / 子树断开 / __id__ 重映射
     │   ├── diff.js              # 字段级 diff（dry-run + diff 子命令共用）
     │   ├── op-schema.js         # ops 跑前 schema 校验
-    │   └── ops/                 # 26 个 op handler，一文件一个
+    │   └── ops/                 # 34 个 op handler，一文件一个
     │
     ├── query/                   # 只读查询
     │   ├── index.js / tree.js / node.js / find.js / field.js
@@ -789,8 +799,6 @@ extensions/cocos-mcp/cli/
 ### 测试
 
 ```bash
-# 6 个测试文件 116 个用例
-for f in extensions/cocos-mcp/cli/test/*.test.js; do
-  node --test "$f" 2>&1 | grep -E "^# (pass|fail)"
-done
+# CLI、Router、Server 完整回归；所有 Prefab fixture 均由测试在临时目录自建
+node --test cli/test/*.test.js router/test/*.test.js server/*.test.js
 ```

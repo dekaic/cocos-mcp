@@ -14,16 +14,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { clearCache } = require('../../classid-resolver.js');
-
-function _v4Uuid() {
-  const b = crypto.randomBytes(16);
-  b[6] = (b[6] & 0x0f) | 0x40;  // version 4
-  b[8] = (b[8] & 0x3f) | 0x80;  // variant 10
-  const h = b.toString('hex');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
-}
+const { deterministicUUID } = require('../../id.js');
+const { normalizeOutputSeedPath } = require('../../cli/output-seed.js');
 
 const _META_TEMPLATES = {
   '.ts': (uuid) => ({
@@ -81,7 +74,9 @@ function execEnsureMeta(prefabData, op) {
 
   const metaPath = filePath + '.meta';
   if (fs.existsSync(metaPath)) {
-    // 幂等：已存在不动
+    // 幂等：已存在不动。但 meta 可能是 Creator/外部在
+    // Router 上次扫描后才生成的，必须让同 batch 后续 op 重建索引。
+    clearCache();
     return -1;
   }
 
@@ -93,13 +88,25 @@ function execEnsureMeta(prefabData, op) {
     );
   }
 
-  if (prefabData.dryRun) {
-    // dry-run 模式不落盘
-    return -1;
+  const meta = template(deterministicUUID(`ensure-meta:${normalizeOutputSeedPath(metaPath)}`));
+  if (!Array.isArray(prefabData.plannedExternalChanges)) {
+    prefabData.plannedExternalChanges = [];
   }
+  prefabData.plannedExternalChanges.push({ action: 'create-meta', path: metaPath, meta });
 
-  const meta = template(_v4Uuid());
+  if (prefabData.dryRun) return -1;
+
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
+  // ensure-meta 是 batch 中少数会立即写盘的 op。先登记回滚，
+  // 若后续 op 失败，editPrefab 会删除本次新建的 meta。
+  if (!Array.isArray(prefabData.rollbackActions)) {
+    prefabData.rollbackActions = [];
+  }
+  prefabData.rollbackActions.push(() => {
+    if (fs.existsSync(metaPath)) fs.unlinkSync(metaPath);
+    clearCache();
+  });
+  prefabData.externalChanged = true;
   // 同 batch 后续 op（如 add-component）会调 resolveClassIdByName 查表，
   // resolver 有进程内 cache，必须 invalidate 让下次重扫覆盖新建的 meta
   clearCache();

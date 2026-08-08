@@ -4,6 +4,8 @@
 > .anim 和 .prefab 都是「JSON 数组 + `__id__` 交叉引用」的同构格式，parse/write 复用 [prefab-schema.md](./prefab-schema.md) 里描述的规则；本文只补 .anim 独有的对象类型与字段。
 > 样本来源：`assets/packages/module/game/merge/effect/component/prefab/Skwjquchuquchu.anim`。
 
+> 运行时前提：Creator「项目设置 → 功能裁剪」必须启用 Animation。CLI 可以在离线状态正确解析和生成 `cc.AnimationClip`，但关闭动画模块的 release 包仍可能在加载时抛 Error 5302；`anim query` / `anim batch` 会检测项目 engine 配置并警告。
+
 ---
 
 ## 1. 整体结构

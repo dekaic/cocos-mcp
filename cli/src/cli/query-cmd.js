@@ -17,6 +17,20 @@ function resolvePath(p) {
 }
 
 function cmdQuery(args) {
+  if (args[0] === '--help' || args[0] === '-h') {
+    process.stdout.write(`query <prefab> [options]
+
+Selectors:
+  --selector tree [--with-comps]
+  --selector node --name <node> [--with-comps]
+  --selector find --type <componentType>
+  --selector field --name <node> --comp <componentType> --field <field>
+  --selector overrides (--id <n> | --path <path> | --name <node>)
+
+componentType 可传 cc.Label、压缩 classId、原始 UUID 或 @ccclass 名。
+`);
+    return;
+  }
   const { flags, positional } = parseFlags(args);
 
   const prefabArg = positional[0];

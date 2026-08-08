@@ -77,7 +77,7 @@ node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 复制节点 | `clone-node` |
 | 加组件 | `add-component` |
 | 删组件（普通节点） | `remove-component`（stub 不支持，用 `set-component-enabled` 禁用） |
-| **新建 .ts / .json 后让 cli 当场可识别** | `ensure-meta`（path 相对项目根或绝对路径，建 v4 uuid meta）。**新建脚本必须用**——不然 add-component 会因 cli 查不到 .meta 抛错。同 batch 内放在 `add-component` 前 |
+| **新建 .ts / .json 后让 cli 当场可识别** | `ensure-meta`（path 相对项目根或绝对路径，按项目内规范化路径生成确定性 v4 uuid meta）。dry-run 的 `externalChanges` 会给出与 apply 相同的 uuid；同 batch 内放在 `add-component` 前 |
 | 给脚本 @property 挂节点引用 | `set-component-ref`（refType=`cc.Node`） |
 | 给脚本 @property 挂组件引用 | `set-component-ref`（refType=`cc.Button` 等） |
 | 给脚本 @property 挂 stub 内组件 | `set-component-ref`（refNode 是 stub，自动走 TargetOverrideInfo） |
@@ -93,11 +93,12 @@ node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 跑 ops.json | `batch <prefab> <ops.json>` |
 | 干跑预览（不写盘） | `batch <prefab> <ops.json> --dry-run` |
 | 跨多个 prefab 跑同一组 ops | `batch <ops.json> --glob "<pattern>"`（先 `--dry-run` 确认匹配） |
-| 操作 .anim 文件 | `anim query` / `anim batch <file> <ops.json>` |
+| 操作 .anim 文件 | `anim query` / `anim batch <file> <ops.json>`；release 使用前确认 Creator 功能裁剪已启用 Animation，否则可能 Error 5302 |
+| Creator 构建并严格核对本次产物 | `build --project <root> --config <json> --strict`；非零 Creator 退出码只有在本次新鲜产物完整且 settings 可解析时才接受，陈旧历史产物会失败 |
 | 单字段快捷写入（active / label.text / position.x\|y\|z） | `set <prefab> <nodeName> <field> <value>` |
 | 创建新 prefab（最小 root + UITransform） | `create-prefab <out> [--name X] [--width W] [--height H]` |
 | 创建 spine prefab（root + UITransform + sp.Skeleton） | `create-prefab <out> --add-spine <skel-uuid>`，批量靠 shell `for` 循环喂 .skel.meta 的 uuid |
-| **从 src 提取某子节点为独立 prefab**（含组件 + PrefabInfo + stub 嵌套等所有引用闭包） | `extract-prefab <src> <out> --node <selector> [--name X]`。selector 同 batch 三种（名/`{id:N}`/`{path:"A/B"}`）。新根 `_parent=null`，PrefabInfo.root 指自己、asset 指 idx 0；适合"把 HomeBottom.btnTask 拆成 task BottomEntry.prefab" 这类场景 |
+| **从 src 提取某子节点为独立 prefab**（含组件 + PrefabInfo + stub 嵌套等引用闭包） | `extract-prefab <src> <out> --node <selector> [--name X]`。selector 支持名/数字 id/`{id:N}`/`{path:"A/B"}`。新根 `_parent=null`，PrefabInfo.root 指自己、asset 指 idx 0；只迁移 source/target 双端均在子树内的 root targetOverrides；直接选择 nested stub 根会明确拒绝 |
 | **清 prefab data 数组 null 槽位 + 重映射 __id__**（早期手工生成的历史包袱） | `compact-prefab <prefab> [--dry-run]`。Cocos editor 反序列化容错跳过 null，但 build worker 严格 scan 撞 null 崩 `Cannot read properties of undefined (reading '__type__')`。算法同 extract-cmd line 105-132 紧凑 push + remap，但不剔除任何东西。dry-run 输出 dangling 引用警告（指向已删 null 的 `__id__`）。只清顶层 data 数组 null；子节点字段里的 null 引用要靠 GUI 重存或 query+set 单点修复 |
 
 ## 写 ops.json 速记

@@ -5,15 +5,15 @@
 //   CocosCreator --project <path> --build "configPath=<json>"
 //   CocosCreator --project <path> --build "platform=<plat>;debug=<bool>"
 //
-// 退出码：Cocos 退出非 0 常见于 postBuild 阶段的资源警告等非致命问题（主构建其实成功）。
-//   默认照产物存在性判定：产物齐了就退 0（成功），产物缺才透传 Cocos 退出码（失败）。
-//   --strict 关掉这个兜底，直接透传 Cocos 退出码。
+// 退出码：Cocos 退出非 0 常见于 Builder 已完成后的 Electron 收尾阶段。
+//   因此不能只看进程码，也不能接受上一次遗留的旧产物：必须验证本次启动后生成的关键文件。
+//   --strict 还会在 Cocos 返回 0 时强制要求可定位、可解析且时间戳新鲜的产物。
 //
 // 用法：
 //   cocos-mcp-cli build --project <path> --version 3.8.8 --config <buildConfig.json>
 //   cocos-mcp-cli build --project <path> --cocos <CocosCreator可执行> --platform web-mobile
 //   cocos-mcp-cli build ... --dry-run     # 只打印命令不真跑
-//   cocos-mcp-cli build ... --strict      # 严格透传 Cocos 退出码（不做产物兜底）
+//   cocos-mcp-cli build ... --strict      # 严格验证本次构建产物
 // ============================================================
 
 'use strict';
@@ -67,8 +67,7 @@ function resolveCocos(a) {
     die('需指定 CocosCreator 可执行：--cocos <path> 或 --version <如 3.8.8>');
 }
 
-// 退出非 0 时按产物存在性判定主构建是否成功。true=产物齐 / false=产物缺 / null=无法定位产物目录
-function checkArtifact(a) {
+function resolveOutputDir(a) {
     let outDir;
     if (a.platform) {
         // outputName 默认等于 platform；非默认场景请用 --config
@@ -81,9 +80,33 @@ function checkArtifact(a) {
             outDir = path.join(bp, on);
         } catch (e) { return null; }
     }
-    if (!outDir || !fs.existsSync(outDir)) return false;
-    // 关键产物标志：index.html(web) / game.json(小游戏) / application.js
-    return ['index.html', 'game.json', 'application.js'].some(function (m) { return fs.existsSync(path.join(outDir, m)); });
+    return outDir || null;
+}
+
+// 验证产物来自本次构建，而非 build/ 里遗留的旧文件。
+function inspectArtifact(a, startedAt) {
+    const outDir = resolveOutputDir(a);
+    if (!outDir) return { valid: false, reason: 'cannot locate output directory' };
+    if (!fs.existsSync(outDir)) return { valid: false, reason: 'artifact directory is missing', outDir };
+
+    const markerNames = ['index.html', 'game.json', 'application.js', path.join('src', 'settings.json')];
+    const markers = markerNames
+        .map((name) => path.join(outDir, name))
+        .filter((file) => fs.existsSync(file));
+    if (markers.length === 0) return { valid: false, reason: 'required artifact markers are missing', outDir };
+
+    const newestMtime = Math.max.apply(null, markers.map((file) => fs.statSync(file).mtimeMs));
+    // 常见文件系统时间戳精度为 1 秒，留 2 秒容差。
+    if (newestMtime < startedAt - 2000) {
+        return { valid: false, reason: 'stale artifact from an earlier build', outDir, newestMtime };
+    }
+
+    const settingsPath = path.join(outDir, 'src', 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+        try { JSON.parse(fs.readFileSync(settingsPath, 'utf8')); }
+        catch (e) { return { valid: false, reason: 'generated settings.json is invalid JSON', outDir }; }
+    }
+    return { valid: true, reason: 'fresh verified artifact', outDir, markers };
 }
 
 function cmdBuild(rest) {
@@ -97,7 +120,7 @@ function cmdBuild(rest) {
             '  --platform <plat>      或按平台构建（→ --build "platform=<plat>"），如 web-mobile / alipay-mini-game\n' +
             '  --debug                平台构建时 debug=true（默认 false）\n' +
             '  --dry-run              只打印将执行的命令，不真跑\n' +
-            '  --strict               严格透传 Cocos 退出码（默认会按产物存在性兜底，把 postBuild 非致命的非 0 当成功）\n\n' +
+            '  --strict               严格验证本次产物；Creator 返回 0 但产物缺失/陈旧也判失败\n\n' +
             '示例:\n' +
             '  cocos-mcp-cli build -p /path/to/forest -v 3.8.8 --config /path/build.json\n' +
             '  cocos-mcp-cli build -p /path/to/forest -v 3.8.8 --platform web-mobile --dry-run\n');
@@ -127,27 +150,32 @@ function cmdBuild(rest) {
     }
 
     process.stdout.write('Cocos CLI build 启动（headless，可能耗时几分钟）:\n  --project ' + a.project + '\n  --build "' + buildArg + '"\n\n');
+    const startedAt = Date.now();
     const child = spawn(cocos, argv, { stdio: 'inherit' });
     child.on('error', function (e) { die('启动 Cocos 失败: ' + e.message); });
     child.on('exit', function (code) {
+        const artifact = inspectArtifact(a, startedAt);
         if (code === 0) {
-            process.stdout.write('\nCocos 退出码: 0 — 构建成功\n');
+            if (a.strict && !artifact.valid) {
+                process.stdout.write('\nCocos 退出码: 0，但严格产物验证失败：' + artifact.reason + ' → 构建失败。\n');
+                process.exit(1);
+                return;
+            }
+            process.stdout.write('\nCocos 退出码: 0 — 构建成功' +
+                (artifact.valid ? '（' + artifact.reason + '）' : '（产物未验证：' + artifact.reason + '）') + '\n');
             process.exit(0);
+            return;
         }
-        const arti = a.strict ? null : checkArtifact(a);
-        if (arti === true) {
-            process.stdout.write('\nCocos 退出码: ' + code + '（非 0），但产物已生成 → 判定主构建成功（非 0 多为 postBuild 资源警告等非致命问题）。\n');
+        if (artifact.valid) {
+            process.stdout.write('\nCocos 退出码: ' + code + '（非 0），但检测到 ' + artifact.reason +
+                ' → 判定 Builder 主构建成功。\n');
             process.exit(0);
+            return;
         }
-        if (arti === false) {
-            process.stdout.write('\nCocos 退出码: ' + code + '，产物未生成 → 构建失败。\n');
-            process.exit(code == null ? 1 : code);
-        }
-        // null：--strict 或无法定位产物目录（如 --config 解析失败）→ 透传
         process.stdout.write('\nCocos 退出码: ' + (code == null ? '(被信号终止)' : code) +
-            (a.strict ? '（--strict，透传）' : '（无法定位产物目录，透传）') + '\n');
+            '，产物验证失败：' + artifact.reason + ' → 构建失败。\n');
         process.exit(code == null ? 1 : code);
     });
 }
 
-module.exports = { cmdBuild };
+module.exports = { cmdBuild, resolveOutputDir, inspectArtifact };

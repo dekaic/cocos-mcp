@@ -4,12 +4,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { defineTools } = require('./tools.js');
 
-test('scene_create_component forwards node uuid and component class to Cocos', async () => {
+test('scene_create_component uses the validated scene script with undo recording', async () => {
     const calls = [];
     const tools = defineTools({
         msg: async function () {
             calls.push(Array.from(arguments));
-            return 'created';
+            return arguments[1] === 'begin-recording' ? 'undo-1' : 'created';
         },
         local: {},
     });
@@ -21,9 +21,245 @@ test('scene_create_component forwards node uuid and component class to Cocos', a
         await tool.handler({ uuid: 'node-uuid', component: 'cc.UISkew' }),
         'created'
     );
-    assert.deepEqual(calls, [[
-        'scene',
-        'create-component',
-        { uuid: 'node-uuid', component: 'cc.UISkew' },
-    ]]);
+    assert.deepEqual(calls, [
+        ['scene', 'begin-recording', ['node-uuid']],
+        ['scene', 'execute-scene-script', {
+            name: 'cocos-mcp',
+            method: 'createComponent',
+            args: [{ uuid: 'node-uuid', component: 'cc.UISkew' }],
+        }],
+        ['scene', 'end-recording', 'undo-1'],
+    ]);
+});
+
+test('scene mutation preserves the original error when undo cancellation also fails', async () => {
+    const tools = defineTools({
+        msg: async function (_target, name) {
+            if (name === 'begin-recording') return 'undo-1';
+            if (name === 'execute-scene-script') throw new Error('component class not found: Bad');
+            if (name === 'cancel-recording') throw new Error('cancel failed');
+            return null;
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_create_component');
+    await assert.rejects(
+        tool.handler({ uuid: 'node', component: 'Bad' }),
+        /component class not found: Bad/
+    );
+});
+
+test('scene tools reject missing required arguments before sending IPC', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            calls.push(Array.from(arguments));
+            return null;
+        },
+        local: {},
+    });
+
+    await assert.rejects(
+        tools.find((item) => item.name === 'scene_open_scene').handler({ url: 'db://assets/Main.scene' }),
+        /uuid.*required/i
+    );
+    await assert.rejects(
+        tools.find((item) => item.name === 'scene_query_node').handler({}),
+        /uuid.*required/i
+    );
+    await assert.rejects(
+        tools.find((item) => item.name === 'scene_execute_component_method').handler({ uuid: 'comp' }),
+        /name.*required/i
+    );
+    assert.deepEqual(calls, []);
+});
+
+test('scene_query_node rejects Cocos null instead of reporting a false success', async () => {
+    const tools = defineTools({ msg: async () => null, local: {} });
+    const tool = tools.find((item) => item.name === 'scene_query_node');
+    await assert.rejects(tool.handler({ uuid: 'missing-node' }), /not found.*missing-node/i);
+});
+
+test('scene IPC has a bounded timeout with an actionable error', async () => {
+    const tools = defineTools({
+        msg: async () => new Promise(() => {}),
+        local: {},
+        sceneTimeoutMs: 10,
+    });
+    const tool = tools.find((item) => item.name === 'scene_query_node');
+    await assert.rejects(tool.handler({ uuid: 'node' }), /scene query-node.*timed out.*10ms/i);
+});
+
+test('scene_open_scene validates the asset before asking Cocos to open it', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[0] === 'asset-db') return null;
+            return 'opened';
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_open_scene');
+    await assert.rejects(tool.handler({ uuid: 'missing-scene' }), /scene asset not found/i);
+    assert.deepEqual(calls, [['asset-db', 'query-asset-info', 'missing-scene']]);
+});
+
+test('scene_open_scene rejects assets that are not scenes', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[0] === 'asset-db') return { uuid: args[2], type: 'cc.Prefab' };
+            return 'opened';
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_open_scene');
+    await assert.rejects(tool.handler({ uuid: 'prefab-uuid' }), /not a cc\.SceneAsset/i);
+    assert.equal(calls.some((call) => call[0] === 'scene' && call[1] === 'open-scene'), false);
+});
+
+test('scene_save_scene refuses untitled scenes instead of opening a blocking Save As dialog', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[0] === 'scene' && args[1] === 'execute-scene-script') {
+                return { uuid: 'runtime-only', name: 'scene-2d' };
+            }
+            if (args[0] === 'asset-db') return null;
+            return 'saved';
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_save_scene');
+    await assert.rejects(tool.handler({}), /untitled scene.*save it in Creator/i);
+    assert.equal(calls.some((call) => call[0] === 'scene' && call[1] === 'save-scene'), false);
+});
+
+test('scene_set_property rejects an unknown dump path before mutation', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[1] === 'query-node') return { position: { value: { x: 0, y: 0, z: 0 } } };
+            return true;
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_set_property');
+    await assert.rejects(
+        tool.handler({ uuid: 'node', path: 'missing.path', dump: { type: 'Number', value: 2 } }),
+        /property path not found.*missing\.path/i
+    );
+    assert.equal(calls.some((call) => call[1] === 'set-property'), false);
+});
+
+test('scene_set_property returns a verified before/after result', async () => {
+    const calls = [];
+    let queryCount = 0;
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[1] === 'query-node') {
+                queryCount++;
+                return { position: { value: { x: queryCount === 1 ? 0 : 5, y: 0, z: 0 } } };
+            }
+            return true;
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_set_property');
+    const result = await tool.handler({
+        uuid: 'node', path: 'position', dump: { type: 'Vec3', value: { x: 5, y: 0, z: 0 } },
+    });
+    assert.deepEqual(result, {
+        changed: true,
+        target: 'node',
+        path: 'position',
+        before: { x: 0, y: 0, z: 0 },
+        after: { x: 5, y: 0, z: 0 },
+    });
+});
+
+test('scene_execute_component_method routes through strict component validation', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[1] === 'begin-recording') return 'undo-method';
+            if (args[1] === 'execute-scene-script') return { executed: true, result: 7 };
+            return true;
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_execute_component_method');
+    const result = await tool.handler({ uuid: 'component-uuid', name: 'rebuild', args: [7] });
+    assert.deepEqual(result, { executed: true, result: 7 });
+    assert.deepEqual(calls, [
+        ['scene', 'begin-recording', ['component-uuid']],
+        ['scene', 'execute-scene-script', {
+            name: 'cocos-mcp', method: 'executeComponentMethod',
+            args: [{ uuid: 'component-uuid', name: 'rebuild', args: [7] }],
+        }],
+        ['scene', 'end-recording', 'undo-method'],
+    ]);
+});
+
+test('asset_create reports conflicts and returns structured create/overwrite state', async () => {
+    const calls = [];
+    let existing = { uuid: 'asset-1', url: 'db://assets/Test.json' };
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[1] === 'query-asset-info') return existing;
+            if (args[1] === 'create-asset') {
+                existing = { uuid: 'asset-1', url: args[2] };
+                return existing;
+            }
+            return null;
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'asset_create');
+    await assert.rejects(
+        tool.handler({ url: 'db://assets/Test.json', content: '{}' }),
+        /asset already exists.*overwrite/i
+    );
+    assert.equal(calls.some((call) => call[1] === 'create-asset'), false);
+
+    const overwritten = await tool.handler({
+        url: 'db://assets/Test.json', content: '{"v":2}', overwrite: true,
+    });
+    assert.deepEqual(overwritten, { created: false, overwritten: true, asset: existing });
+
+    existing = null;
+    const created = await tool.handler({ url: 'db://assets/New.json', content: '{}' });
+    assert.equal(created.created, true);
+    assert.equal(created.overwritten, false);
+    assert.equal(created.asset.url, 'db://assets/New.json');
+});
+
+test('asset lookup tools reject missing assets instead of returning empty success', async () => {
+    const tools = defineTools({ msg: async () => null, local: {} });
+    await assert.rejects(
+        tools.find((item) => item.name === 'asset_query_info').handler({ urlOrUUID: 'db://assets/Missing.prefab' }),
+        /asset not found/i
+    );
+    await assert.rejects(
+        tools.find((item) => item.name === 'asset_query_url').handler({ uuid: 'missing-uuid' }),
+        /asset url not found/i
+    );
+    await assert.rejects(
+        tools.find((item) => item.name === 'asset_query_uuid').handler({ url: 'db://assets/Missing.prefab' }),
+        /asset uuid not found/i
+    );
 });

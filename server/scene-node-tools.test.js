@@ -26,6 +26,24 @@ test('scene_query_node_tree reads through the cocos-mcp scene script', async () 
     ]]);
 });
 
+test('scene_query_node_tree hides Creator editor-only helper roots', async () => {
+    const tools = defineTools({
+        msg: async () => ({
+            uuid: 'scene',
+            name: 'Main',
+            children: [
+                { uuid: 'canvas', name: 'Canvas', children: [] },
+                { uuid: 'fg', name: 'Editor Scene Foreground', children: [] },
+                { uuid: 'bg', name: 'Editor Scene Background', children: [] },
+            ],
+        }),
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_query_node_tree');
+    const result = await tool.handler({});
+    assert.deepEqual(result.children.map((child) => child.name), ['Canvas']);
+});
+
 test('scene node tools route through the cocos-mcp scene script', async () => {
     const calls = [];
     const tools = createTools(calls);

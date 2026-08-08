@@ -17,6 +17,7 @@
 
 const { resolveNode } = require('../helpers.js');
 const { collectExistingFileIds, uniqueFileId } = require('../id-utils.js');
+const { getStubInnerRootFileId } = require('../../overrides.js');
 
 function execAddNestedPrefab(prefabData, op) {
   const { elements, rootId } = prefabData;
@@ -46,18 +47,30 @@ function execAddNestedPrefab(prefabData, op) {
   const instanceId = stubNodeId + 2;
   let nextId = instanceId + 1;
 
+  const stubPrefabInfo = {
+    __type__: 'cc.PrefabInfo',
+    root: { __id__: stubNodeId },
+    asset: { __uuid__: cleanUuid, __expectedType__: 'cc.Prefab' },
+    fileId: stubFileId,
+    instance: { __id__: instanceId },
+    targetOverrides: null,
+  };
+
   const propertyOverrideRefs = [];
   const overrideElements = [];
 
-  // PropertyOverride 的 targetInfo.localID 用 stub 自己在外层 prefab 内的 PrefabInfo.fileId
-  // （而不是子 prefab 内根节点 fileId）。CC3 协议：targetInfo 定位 override 应用的「目标对象」,
-  // 对于 stub Node 自己的 _name/_lpos 这类字段，目标对象就是 stub 在外层 prefab 内的标识。
+  // Cocos 在子 prefab 的 targetMap 内定位 override 目标，因此必须使用
+  // 子 prefab 内部根节点的 fileId，外层 stubFileId 不在这张 map 中。
+  const overrideTargetFileId = name !== undefined || lpos !== undefined
+    ? getStubInnerRootFileId(prefabData, stubPrefabInfo)
+    : null;
+
   function pushOverride(propertyPath, value) {
     const tiId = nextId++;
     const oiId = nextId++;
     overrideElements.push({
       __type__: 'cc.TargetInfo',
-      localID: [stubFileId],
+      localID: [overrideTargetFileId],
     });
     overrideElements.push({
       __type__: 'CCPropertyOverrideInfo',
@@ -84,15 +97,6 @@ function execAddNestedPrefab(prefabData, op) {
     _parent: { __id__: parentId },
     _prefab: { __id__: prefabInfoId },
     __editorExtras__: {},
-  };
-
-  const stubPrefabInfo = {
-    __type__: 'cc.PrefabInfo',
-    root: { __id__: stubNodeId },
-    asset: { __uuid__: cleanUuid, __expectedType__: 'cc.Prefab' },
-    fileId: stubFileId,
-    instance: { __id__: instanceId },
-    targetOverrides: null,
   };
 
   const prefabInstance = {

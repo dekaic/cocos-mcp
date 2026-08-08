@@ -248,6 +248,7 @@ function getNestedNodeFileId(hostPrefabPath, elements, stubNodeId, nodeName) {
  */
 function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, value) {
   const { elements } = prefabData;
+  const localIdChain = Array.isArray(compFileId) ? compFileId : [compFileId];
 
   const stubNode = elements[stubNodeId];
   const prefabInfo = elements[stubNode._prefab.__id__];
@@ -267,7 +268,11 @@ function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, v
       if (!tiRef || typeof tiRef.__id__ !== 'number') continue;
       const ti = elements[tiRef.__id__];
       if (!ti || ti.__type__ !== 'cc.TargetInfo') continue;
-      if (!Array.isArray(ti.localID) || ti.localID[0] !== compFileId) continue;
+      if (
+        !Array.isArray(ti.localID) ||
+        ti.localID.length !== localIdChain.length ||
+        !ti.localID.every((part, index) => part === localIdChain[index])
+      ) continue;
 
       if (
         Array.isArray(info.propertyPath) &&
@@ -282,7 +287,7 @@ function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, v
 
   const targetInfo = {
     __type__: 'cc.TargetInfo',
-    localID: [compFileId],
+    localID: localIdChain.slice(),
   };
   const targetInfoId = elements.length;
   elements.push(targetInfo);

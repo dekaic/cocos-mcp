@@ -529,6 +529,7 @@ function hasReadyAssetText(txt) {
         var parsed = JSON.parse(txt);
         if (Array.isArray(parsed)) return parsed.length > 0;
         if (parsed && Array.isArray(parsed.content)) return parsed.content.length > 0;
+        if (parsed && Array.isArray(parsed.assets)) return parsed.assets.length > 0;
     } catch (e) {
         return false;
     }

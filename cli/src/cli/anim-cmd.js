@@ -1,6 +1,8 @@
 // cli/anim-cmd.js — anim 子命令
 //
-// .anim 文件与 prefab 同为 JSON 数组 + __id__ 引用格式，editPrefab 可直接复用。
+// .anim 文件与 prefab 同为 JSON 数组 + __id__ 引用格式，但标准
+// .anim 以 cc.AnimationClip 而非 cc.Prefab 为资产头。通过 rootType
+// 显式选择动画格式，其余 query/edit 路径仍可复用。
 // 本子命令是封装：让用户语义上明确"这是动画文件操作"，并允许 query 节点结构。
 //
 // 用法：
@@ -8,8 +10,8 @@
 //   anim batch <anim> <ops.json> [--dry-run]
 //
 // 注意：op 库当前面向 cc.Node 树设计，对 .anim 内的 cc.AnimationClip /
-// cc.Track / cc.Curve 等结构无专属 op，但通用的 set-component-field（用于
-// AnimationClip 顶层）/ set-component-ref / dedupe-component 等仍可用。
+// cc.Track / cc.Curve 等结构无专属 op；set-component-field 可直接改
+// AnimationClip 顶层或按 {id:N} 定位的动画对象。
 // 真正的 anim 曲线编辑应由 src/anim-primitives.js 暴露的 helper 在脚本中处理。
 
 'use strict';
@@ -19,6 +21,7 @@ const path = require('path');
 const { editPrefab } = require('../editor/index.js');
 const { queryPrefab } = require('../query/index.js');
 const { parseFlags } = require('./flags.js');
+const { warnForAnimationModule } = require('../engine-modules.js');
 
 function die(msg) {
   process.stderr.write('Error: ' + msg + '\n');
@@ -53,6 +56,7 @@ op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primiti
     if (!animArg) die('anim query: 必须提供 <anim>');
     const animPath = resolvePath(animArg);
     if (!fs.existsSync(animPath)) die(`anim query: 文件不存在: ${animPath}`);
+    warnForAnimationModule(animPath);
 
     const selectorType = flags['selector'] || 'tree';
     const withComps = flags['with-comps'] === true;
@@ -67,7 +71,7 @@ op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primiti
 
     let result;
     try {
-      result = queryPrefab(animPath, selector);
+      result = queryPrefab(animPath, selector, { rootType: 'cc.AnimationClip' });
     } catch (e) {
       die('anim query 失败: ' + e.message);
     }
@@ -84,6 +88,7 @@ op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primiti
     const opsPath = resolvePath(opsArg);
     if (!fs.existsSync(animPath)) die(`anim batch: 文件不存在: ${animPath}`);
     if (!fs.existsSync(opsPath)) die(`anim batch: ops 文件不存在: ${opsPath}`);
+    warnForAnimationModule(animPath);
 
     let ops;
     try {
@@ -94,6 +99,7 @@ op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primiti
     if (!Array.isArray(ops)) die('anim batch: ops.json 必须是数组');
 
     const editOptions = {};
+    editOptions.rootType = 'cc.AnimationClip';
     if (flags['project-root']) editOptions.projectRoot = resolvePath(flags['project-root']);
     if (flags['dry-run'] === true) editOptions.dryRun = true;
 

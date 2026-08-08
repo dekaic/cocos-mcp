@@ -12,6 +12,18 @@ function queryField(prefabData, args) {
   const node = prefabData.findNodeByName(name);
   if (!node) throw new Error(`queryPrefab[field]: 找不到节点 "${name}"`);
 
+  // 标准 .anim 的 cc.AnimationClip 是顶层资产对象，不是挂在
+  // cc.Node._components 下的组件。保持现有 --name/--comp/--field
+  // 命令界面，当命名对象本身类型匹配时直接读字段。
+  if (node.__type__ === componentType) {
+    if (!(field in node)) {
+      throw new Error(
+        `queryPrefab[field]: 对象 "${name}" 的 ${componentType} 没有字段 "${field}"`
+      );
+    }
+    return node[field];
+  }
+
   if (!Array.isArray(node._components)) {
     throw new Error(`queryPrefab[field]: 节点 "${name}" 没有组件`);
   }

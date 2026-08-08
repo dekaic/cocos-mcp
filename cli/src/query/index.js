@@ -17,9 +17,10 @@ const { queryNode } = require('./node.js');
 const { queryFind } = require('./find.js');
 const { queryField } = require('./field.js');
 const { queryOverrides } = require('./overrides.js');
+const { normalizeComponentType } = require('../editor/helpers.js');
 
-function queryPrefab(filePath, selector) {
-  const prefabData = parsePrefab(filePath);
+function queryPrefab(filePath, selector, options) {
+  const prefabData = parsePrefab(filePath, options);
   // overrides 需要按 uuid 反查嵌套 prefab，必须知道 host path 用作 UuidResolver 起点
   prefabData.resolverStartPath = filePath;
 
@@ -37,13 +38,17 @@ function queryPrefab(filePath, selector) {
   }
 
   if (type === 'find') {
-    const nodeType = selector && selector.nodeType;
+    let nodeType = selector && selector.nodeType;
     if (!nodeType) throw new Error('queryPrefab: selector.type="find" 时必须提供 selector.nodeType');
+    nodeType = normalizeComponentType(nodeType, filePath);
     return queryFind(prefabData, nodeType);
   }
 
   if (type === 'field') {
-    return queryField(prefabData, selector);
+    const fieldSelector = Object.assign({}, selector, {
+      componentType: normalizeComponentType(selector && selector.componentType, filePath),
+    });
+    return queryField(prefabData, fieldSelector);
   }
 
   if (type === 'overrides') {

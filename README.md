@@ -4,6 +4,10 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
 把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
 
+## 2.1.0 优化分支
+
+`optimize/mcp-capability-v2.1` 针对 Creator 3.8.x 长驻开发流程收口了一批可复现问题：编辑器就绪判定、`.dev/refresh` 生命周期、Router 工具变更通知、完整 offline schema，以及 Scene/Asset 严格失败语义、Prefab UUID、嵌套 override、标准 AnimationClip、子树提取、批处理原子性和构建产物校验。148 项回归均为自包含测试，不依赖未提交的私有 Prefab fixture。
+
 ---
 
 ## 文档导航
@@ -12,7 +16,7 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 |---|---|---|
 | [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：多项目 MCP 绑定、HTTP fallback、预览 URL、CLI/MCP 分工 | agent 使用本插件前 |
 | [`QUICK-REF.md`](./QUICK-REF.md) | **一页速查表**：节点定位三式、场景 → op 对照、ops.json 速记、踩坑表 | agent 起手第一份，挑不到再翻 cli.md |
-| [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、26 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
+| [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、34 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
 | [`doc/prefab-schema.md`](./doc/prefab-schema.md) | CC3 prefab JSON 结构速查（节点 / 组件 / 引用字段格式） | 看不懂 prefab 字段时查 |
 | [`doc/nested-prefab-protocol.md`](./doc/nested-prefab-protocol.md) | `cc.TargetOverrideInfo` 协议（跨 nested @property 挂载） | 调试 set-component-ref 跨 stub 失败时 |
 | [`doc/prefab-direct-edit.md`](./doc/prefab-direct-edit.md) | offline CLI vs 编辑器路径决策表 | 不确定该用 CLI 还是 scene_set_property 时 |
@@ -110,19 +114,19 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 | Tool | 说明 |
 |---|---|
-| `scene_query_node_tree` | 查询当前场景节点树；传 uuid 查子树 |
-| `scene_query_node` | 查询单节点完整 dump（含所有组件属性） |
+| `scene_query_node_tree` | 查询当前场景节点树；传 uuid 查子树。全树查询默认过滤 Creator 的 Editor Scene Foreground / Background 辅助根 |
+| `scene_query_node` | 查询单节点完整 dump（含所有组件属性）；不存在时明确报错 |
 | `scene_add_node` | 在指定父节点下创建场景节点 |
 | `scene_clone_node` | 复制场景节点树到指定父节点下 |
 | `scene_reparent_node` | 调整场景节点父级 |
 | `scene_remove_node` | 删除场景节点及其子树 |
-| `scene_create_component` | 为场景节点添加组件 |
+| `scene_create_component` | 为场景节点添加真实 `cc.Component`；不存在或非组件类会拒绝 |
 | `scene_remove_component` | 移除场景节点组件 |
-| `scene_set_property` | 设置节点/组件属性（path 为 dump path，如 `position`、`__comps__.0.string`） |
+| `scene_set_property` | 设置节点/组件属性（path 为 dump path，如 `position`、`__comps__.0.string`），并回读返回 before / after |
 | `scene_open_scene` | 打开场景（传场景资源 uuid） |
-| `scene_save_scene` | 保存当前场景 |
+| `scene_save_scene` | 保存当前场景；未落盘的新场景会拒绝并提示先在 Creator 中命名 |
 | `scene_soft_reload` | 软重载场景，不清编辑器状态 |
-| `scene_execute_component_method` | 调用指定节点的组件方法 |
+| `scene_execute_component_method` | 按组件 UUID 调用方法；节点 UUID、缺失方法或非组件目标会拒绝 |
 
 > 修改 prefab 资源文件属性建议用 `prefab_edit`（offline），`scene_set_property` 只适用于运行时节点或需要编辑器上下文的情况。
 
@@ -131,12 +135,12 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | Tool | 说明 |
 |---|---|
 | `asset_query_assets` | 按 glob pattern 列资源（如 `db://assets/**/*.prefab`） |
-| `asset_query_info` | 查资源详情（传 uuid 或 url） |
-| `asset_query_url` | 由 uuid 查资源 url |
-| `asset_query_uuid` | 由 url 查资源 uuid |
+| `asset_query_info` | 查资源详情（传 uuid 或 url）；不存在时明确报错 |
+| `asset_query_url` | 由 uuid 查资源 url；不存在时明确报错 |
+| `asset_query_uuid` | 由 url 查资源 uuid；不存在时明确报错 |
 | `asset_refresh` | 刷新资源（全量或指定路径） |
 | `asset_reimport` | 重新导入指定资源 |
-| `asset_create` | 创建新资源 |
+| `asset_create` | 创建新资源；默认拒绝覆盖，显式 `overwrite: true` 才允许，并回查返回真实资源信息 |
 | `asset_save` | 保存资源内容 |
 | `asset_delete` | 删除资源 |
 | `asset_move` | 移动/重命名资源 |
@@ -216,7 +220,7 @@ claude mcp add cocos -- node /path/to/cocos-mcp/router/bin.js
 echo "restart-package" > .dev/refresh
 ```
 
-面板上的「重启 MCP Server」按钮只重启 HTTP server 实例，Node require 缓存不动，**改不到 main.js 的代码改动**。`restart-package` 走 `Editor.Package.disable + enable`，整个扩展沙箱重建，所有 JS 重新 require。注意命令是 fire-and-forget，不返回结果；扩展重启过程中 MCP 连接会短暂中断（≈1-2s），重连由 router 自动发现完成。
+面板上的「重启 MCP Server」按钮只重启 HTTP server 实例，Node require 缓存不动，**改不到 main.js 的代码改动**。`restart-package` 走 `Editor.Package.disable + enable`，通常会重新加载扩展；但 Creator 3.8.8 的长驻进程可能仍保留部分 `require` 缓存。命令是 fire-and-forget，不返回结果，MCP 连接会短暂中断。重连后必须核对 `tools/list` 的描述或签名；若仍是旧版本，完整退出并重新打开该 Creator 工程。
 
 ---
 
@@ -225,6 +229,7 @@ echo "restart-package" > .dev/refresh
 1. **stub 节点的组件字段**：`set-label-text` / `set-sprite-frame` / `set-nested-component-field` 已通过 `uuid-resolver.js` 解析 `CompPrefabInfo.fileId` 写入 stub 节点的 override
 2. **多层嵌套 stub**：CLI 已通过 `refSubNode` 字符串数组路径支持。极端深嵌套场景仍建议走 tools pipeline（`tools/step-3-script/bind-prefab-components.ts`）
 3. **offline 改完后需手动触发刷新**：直接写磁盘 Cocos 编辑器不会自动感知。改完后调用 `asset_reimport`（编辑器在线时）或 `preview_refresh_and_reload`，否则编辑器和预览页面看到的仍是旧内容
+4. **AnimationClip 依赖引擎动画模块**：`anim query` / `anim batch` 能验证和编辑合法 `.anim` JSON，但项目仍须在 Creator「项目设置 → 功能裁剪」中启用 Animation。关闭该模块时，release 运行可能报 Error 5302；CLI 会根据 `settings/v2/packages/engine.json` 给出警告。Creator 3.8.8 实测在启用模块后可正常加载生成的 `cc.AnimationClip`
 
 ---
 

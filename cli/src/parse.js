@@ -22,9 +22,16 @@ const fs = require('fs');
  * }
  *
  * @param {string} filePath
+ * @param {object} [options]
+ * @param {'cc.Prefab'|'cc.AnimationClip'} [options.rootType='cc.Prefab']
  * @returns {PrefabData}
  */
-function parsePrefab(filePath) {
+function parsePrefab(filePath, options) {
+  const rootType = options && options.rootType ? options.rootType : 'cc.Prefab';
+  if (rootType !== 'cc.Prefab' && rootType !== 'cc.AnimationClip') {
+    throw new Error(`parsePrefab: 不支持的 rootType "${rootType}"`);
+  }
+
   const raw = fs.readFileSync(filePath, 'utf8');
   let elements;
 
@@ -43,12 +50,15 @@ function parsePrefab(filePath) {
   // 同时校验数组长度
   const idIndex = elements; // 直接按下标访问即可
 
-  // 找 cc.Prefab 资产头（通常在 index 0），取 rootId
+  // 找资产头（通常在 index 0）。Prefab 的根是 data 引用的
+  // cc.Node；标准 .anim 的根则是 cc.AnimationClip 对象本身。
   let rootId = -1;
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
-    if (el && typeof el === 'object' && el.__type__ === 'cc.Prefab') {
-      if (el.data && typeof el.data.__id__ === 'number') {
+    if (el && typeof el === 'object' && el.__type__ === rootType) {
+      if (rootType === 'cc.AnimationClip') {
+        rootId = i;
+      } else if (el.data && typeof el.data.__id__ === 'number') {
         rootId = el.data.__id__;
       }
       break;
@@ -56,7 +66,10 @@ function parsePrefab(filePath) {
   }
 
   if (rootId < 0) {
-    throw new Error(`parsePrefab: 未找到 cc.Prefab 头或 data.__id__（${filePath}）`);
+    const detail = rootType === 'cc.Prefab'
+      ? 'cc.Prefab 头或 data.__id__'
+      : 'cc.AnimationClip 头';
+    throw new Error(`parsePrefab: 未找到 ${detail}（${filePath}）`);
   }
 
   // ─── 辅助：按 __id__ 解引用 ───────────────────────────────
@@ -153,6 +166,7 @@ function parsePrefab(filePath) {
     raw,
     elements,
     rootId,
+    rootType,
     findNodeByName,
     findNodesByType,
     getRoot,

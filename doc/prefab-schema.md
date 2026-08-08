@@ -173,7 +173,7 @@
 
 引用链：stub Node → PrefabInfo（含 fileId + instance 引用）→ PrefabInstance → propertyOverrides[] → CCPropertyOverrideInfo（含 targetInfo）→ TargetInfo（localID = 被嵌套 prefab 内目标节点的 PrefabInfo.fileId）。
 
-**localID 的值**来自被嵌套 prefab 文件内对应节点的 `cc.PrefabInfo.fileId`，两边必须完全一致。根节点的 localID 即 stub 节点自身 `cc.PrefabInfo.fileId`。
+**localID 的值**来自被嵌套 prefab 文件内对应节点的 `cc.PrefabInfo.fileId`，两边必须完全一致。根节点的 localID 是“子 prefab 内根节点”的 `PrefabInfo.fileId`，不是外层宿主文件中 stub 的 `PrefabInfo.fileId`。
 
 覆写组件属性时，TargetInfo.localID 填的是**该组件的 cc.CompPrefabInfo.fileId**（不是节点的 PrefabInfo.fileId）。
 

@@ -63,6 +63,24 @@ test('hasReadyAssetResult accepts text JSON content', () => {
     assert.equal(result, true);
 });
 
+test('hasReadyAssetResult accepts MCP text JSON assets envelope', () => {
+    assert.equal(hasReadyAssetResult({
+        result: {
+            content: [
+                { type: 'text', text: '{"assets":[{"name":"config","url":"db://assets/config"}]}' },
+            ],
+        },
+    }), true);
+
+    assert.equal(hasReadyAssetResult({
+        result: {
+            content: [
+                { type: 'text', text: '{"assets":[]}' },
+            ],
+        },
+    }), false);
+});
+
 test('hasReadyAssetResult rejects empty or error results', () => {
     assert.equal(hasReadyAssetResult({ result: { content: [] } }), false);
     assert.equal(hasReadyAssetResult({ error: { message: 'not ready' } }), false);

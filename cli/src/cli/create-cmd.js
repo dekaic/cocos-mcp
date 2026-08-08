@@ -25,6 +25,7 @@
 const fs = require('fs');
 const path = require('path');
 const { deterministicUUID, deterministicFileId } = require('../id.js');
+const { normalizeOutputSeedPath } = require('./output-seed.js');
 const {
   makePrefabRoot,
   makeNode,
@@ -87,8 +88,12 @@ function cmdCreatePrefab(argv) {
   if (width === null) width = spineSkelUuid ? 100 : 750;
   if (height === null) height = spineSkelUuid ? 100 : 200;
 
-  // 确定性 ID（以名称为种子，保证同名 prefab 每次生成相同 UUID）
-  const seed = `create-prefab:${name}`;
+  // 确定性 ID：输出路径是 prefab 身份的一部分。项目内使用
+  // 规范化项目相对路径，使同一项目在不同机器/worktree 中仍可重放；
+  // 找不到 Cocos 项目根时才退化为规范化绝对路径。
+  const outputAbs = path.resolve(process.cwd(), outputPath);
+  const normalizedOutputPath = normalizeOutputSeedPath(outputAbs);
+  const seed = `create-prefab:${normalizedOutputPath}:${name}`;
   const prefabUuid = deterministicUUID(`${seed}:uuid`);
   const rootFileId = deterministicFileId(`${seed}:root:fid`);
   const uitransformFileId = deterministicFileId(`${seed}:uitransform:fid`);
@@ -147,11 +152,11 @@ function cmdCreatePrefab(argv) {
     return;
   }
 
-  const dir = path.dirname(outputPath);
+  const dir = path.dirname(outputAbs);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  fs.writeFileSync(outputPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
-  fs.writeFileSync(outputPath + '.meta', JSON.stringify(meta, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(outputAbs, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(outputAbs + '.meta', JSON.stringify(meta, null, 2) + '\n', 'utf8');
 
   process.stdout.write(`created: ${outputPath}\n`);
   process.stdout.write(`created: ${outputPath}.meta\n`);

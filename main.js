@@ -3,6 +3,7 @@
 var fs = require('fs');
 var path = require('path');
 var { exec } = require('child_process');
+var EXTENSION_VERSION = require('./package.json').version;
 
 var DEV_DIR = '.dev';
 
@@ -219,11 +220,11 @@ exports.methods = {
         await doReloadScene();
         return true;
     },
-    /** Panel 使用：清理 .dev 临时产物（保留 dev-reload-info.json / dev-reload-panel.json / cc-mcp-panel.json） */
+    /** Panel 使用：清理 .dev 临时产物（保留状态、配置和 refresh 信号文件） */
     cleanDevDir() {
         pushCommandLog('panel', 'clean-dev');
         var devDir = path.join(Editor.Project.path, DEV_DIR);
-        var keep = { 'dev-reload-info.json': 1, 'dev-reload-panel.json': 1, 'cc-mcp-panel.json': 1 };
+        var keep = { 'refresh': 1, 'dev-reload-info.json': 1, 'dev-reload-panel.json': 1, 'cc-mcp-panel.json': 1 };
         var removed = [];
         try {
             var entries = fs.readdirSync(devDir);
@@ -446,7 +447,7 @@ async function startMcpServer() {
 
     var server = sdk.createServer({
         name: 'cocos-mcp',
-        version: '2.0.0',
+        version: EXTENSION_VERSION,
         port: port,
         tools: toolDefs.map(function (t) {
             return {

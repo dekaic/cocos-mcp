@@ -27,7 +27,9 @@ const fs = require('fs');
 const path = require('path');
 const { deterministicUUID } = require('../id.js');
 const { parsePrefab } = require('../parse.js');
-const { resolveNode } = require('../editor/helpers.js');
+const { resolveNode, findRootPrefabInfo, isStub } = require('../editor/helpers.js');
+const { syncNestedRoots } = require('../editor/id-utils.js');
+const { normalizeOutputSeedPath } = require('./output-seed.js');
 
 function die(msg) {
   process.stderr.write('Error: ' + msg + '\n');
@@ -86,25 +88,47 @@ function cmdExtractPrefab(argv) {
   // 1) 解析源 prefab
   const prefabData = parsePrefab(srcAbs);
   const { elements } = prefabData;
-  const { nodeId: srcNodeId } = resolveNode(prefabData, nodeSelector, 'extract-prefab');
+  const { node: srcNode, nodeId: srcNodeId } = resolveNode(prefabData, nodeSelector, 'extract-prefab');
+  if (isStub(elements, srcNode)) {
+    die(
+      '不能直接提取 nested prefab stub；stub 只保存外部 prefab 引用，直接提取会生成空 prefab。' +
+      ' 请从 source prefab 提取真实子树，或直接复制/引用该 nested prefab 资源。'
+    );
+  }
+
+  // targetOverrides 挂在旧宿主根 PrefabInfo，不在被提取子节点的
+  // 普通引用闭包内。先按节点所有权收集子树的节点/组件，
+  // 后面只迁移 source 组件和 target 节点都在子树内的条目。
+  const ownership = _collectSubtreeOwnership(elements, srcNodeId);
 
   // 2) BFS 闭包收集：从 srcNodeId 出发，把所有递归引用的 __id__ 拉进来
   const collected = new Set();
-  const queue = [srcNodeId];
-  while (queue.length > 0) {
-    const idx = queue.shift();
-    if (collected.has(idx)) continue;
-    collected.add(idx);
-    const refs = [];
-    _walkCollect(elements[idx], refs);
-    for (const r of refs) {
-      if (!collected.has(r)) queue.push(r);
+  _collectReferenceClosure(elements, [srcNodeId], collected);
+
+  const retainedTargetOverrideIds = [];
+  const sourceRootPrefabInfo = findRootPrefabInfo(elements, prefabData.rootId);
+  if (sourceRootPrefabInfo && Array.isArray(sourceRootPrefabInfo.targetOverrides)) {
+    for (const ref of sourceRootPrefabInfo.targetOverrides) {
+      if (!ref || typeof ref.__id__ !== 'number') continue;
+      const override = elements[ref.__id__];
+      if (!override || override.__type__ !== 'cc.TargetOverrideInfo') continue;
+      const sourceId = override.source && override.source.__id__;
+      const targetId = override.target && override.target.__id__;
+      if (!ownership.componentIds.has(sourceId) || !ownership.nodeIds.has(targetId)) continue;
+      retainedTargetOverrideIds.push(ref.__id__);
     }
   }
+  _collectReferenceClosure(elements, retainedTargetOverrideIds, collected);
 
-  // 3) 重新编号：new[0] = 新 cc.Prefab 头部，new[1] = srcNode（root），其余按原 idx 升序
+  // 3) 重新编号：new[0] = 新 cc.Prefab 头部，new[1] = srcNode（root），其余按原 idx 升序。
+  // 即使畸形引用把源头收进 collected，也绝不复制第二个 cc.Prefab 头。
   const oldToNew = new Map();
-  const sortedOld = [srcNodeId, ...[...collected].filter((i) => i !== srcNodeId).sort((a, b) => a - b)];
+  const sortedOld = [
+    srcNodeId,
+    ...[...collected]
+      .filter((i) => i !== srcNodeId && i !== 0 && elements[i] && elements[i].__type__ !== 'cc.Prefab')
+      .sort((a, b) => a - b),
+  ];
   const newData = [];
 
   // new[0]: 复制源 prefab 头部模板（只用 __type__ / data / optimizationPolicy / persistent 等基础字段）
@@ -136,21 +160,44 @@ function cmdExtractPrefab(argv) {
   newRoot._parent = null;
   newRoot._name = newName;
 
-  // 6) 修正根节点 _prefab（PrefabInfo）：root 指向新根 idx 1，asset 指向 idx 0
+  // 6) 修正所有本地节点的 PrefabInfo。源文件中这些对象的
+  // root/asset 都指向旧宿主；提取后应统一指向新根和新头。
+  // asset.__uuid__ 的嵌套 prefab PrefabInfo 仍保持外部资产引用。
+  for (let i = 1; i < newData.length; i++) {
+    const prefabInfo = newData[i];
+    if (!prefabInfo) continue;
+    if (prefabInfo.__type__ === 'cc.PrefabInfo') {
+      if (prefabInfo.asset && Object.prototype.hasOwnProperty.call(prefabInfo.asset, '__id__')) {
+        prefabInfo.root = { __id__: 1 };
+        prefabInfo.asset = { __id__: 0 };
+      }
+    } else if (prefabInfo.__type__ === 'cc.PrefabInstance') {
+      prefabInfo.prefabRootNode = { __id__: 1 };
+    }
+  }
+
+  // 新根不再是旧宿主中的实例，清掉仅对旧宿主有意义的字段。
   if (newRoot._prefab && typeof newRoot._prefab.__id__ === 'number') {
     const rootPInfo = newData[newRoot._prefab.__id__];
     if (rootPInfo && rootPInfo.__type__ === 'cc.PrefabInfo') {
       rootPInfo.root = { __id__: 1 };
       rootPInfo.asset = { __id__: 0 };
-      // 这些字段在源 prefab 是相对宿主 prefab 的，新 prefab 是独立的，清掉
+      // instance/nested roots 在新宿主中重建；targetOverrides 只保留双端都在子树内的条目。
       if ('instance' in rootPInfo) rootPInfo.instance = null;
-      if ('targetOverrides' in rootPInfo) rootPInfo.targetOverrides = null;
+      rootPInfo.targetOverrides = retainedTargetOverrideIds.length > 0
+        ? retainedTargetOverrideIds
+          .map((oldId) => oldToNew.get(oldId))
+          .filter((newId) => typeof newId === 'number')
+          .map((newId) => ({ __id__: newId }))
+        : null;
       if ('nestedPrefabInstanceRoots' in rootPInfo) rootPInfo.nestedPrefabInstanceRoots = null;
     }
   }
+  syncNestedRoots(newData, 1);
 
   // 7) 生成 meta
-  const seed = `extract-prefab:${outPath}:${newName}`;
+  const outAbs = path.resolve(process.cwd(), outPath);
+  const seed = `extract-prefab:${normalizeOutputSeedPath(outAbs)}:${newName}`;
   const newUuid = deterministicUUID(`${seed}:uuid`);
   const meta = {
     ver: '1.1.50',
@@ -171,7 +218,6 @@ function cmdExtractPrefab(argv) {
     return;
   }
 
-  const outAbs = path.resolve(process.cwd(), outPath);
   const dir = path.dirname(outAbs);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -200,9 +246,74 @@ function _walkCollect(obj, out) {
     }
     for (const k of Object.keys(obj)) {
       if (SKIP_KEYS.has(k)) continue;
+      // 普通节点的 PrefabInfo.root / asset 是旧宿主的反向链接：
+      // asset -> cc.Prefab.data 和 root 都会回到宿主根，进而把兄弟子树
+      // 乃至第二个 cc.Prefab 头一起拉入输出。这两个引用会在
+      // 重编号后统一指向新宿主，因此不属于子树闭包。
+      if (
+        obj.__type__ === 'cc.PrefabInfo' &&
+        (k === 'root' || k === 'asset' || k === 'targetOverrides')
+      ) continue;
+      if (obj.__type__ === 'cc.PrefabInstance' && k === 'prefabRootNode') continue;
       _walkCollect(obj[k], out);
     }
   }
+}
+
+function _collectReferenceClosure(elements, seeds, collected) {
+  const queue = seeds.slice();
+  while (queue.length > 0) {
+    const idx = queue.shift();
+    if (!Number.isInteger(idx) || idx < 0 || idx >= elements.length || collected.has(idx)) continue;
+    collected.add(idx);
+    const refs = [];
+    _walkCollect(elements[idx], refs);
+    for (const ref of refs) {
+      if (!collected.has(ref)) queue.push(ref);
+    }
+  }
+}
+
+function _collectSubtreeOwnership(elements, rootNodeId) {
+  const nodeIds = new Set();
+  const componentIds = new Set();
+
+  function visit(nodeId) {
+    if (nodeIds.has(nodeId)) return;
+    const node = elements[nodeId];
+    if (!node || node.__type__ !== 'cc.Node') return;
+    nodeIds.add(nodeId);
+
+    if (Array.isArray(node._components)) {
+      for (const ref of node._components) {
+        if (ref && typeof ref.__id__ === 'number') componentIds.add(ref.__id__);
+      }
+    }
+    if (Array.isArray(node._children)) {
+      for (const ref of node._children) {
+        if (ref && typeof ref.__id__ === 'number') visit(ref.__id__);
+      }
+    }
+
+    if (!node._prefab || typeof node._prefab.__id__ !== 'number') return;
+    const prefabInfo = elements[node._prefab.__id__];
+    if (!prefabInfo || !prefabInfo.instance || typeof prefabInfo.instance.__id__ !== 'number') return;
+    const instance = elements[prefabInfo.instance.__id__];
+    if (!instance || instance.__type__ !== 'cc.PrefabInstance') return;
+    if (Array.isArray(instance.mountedComponents)) {
+      for (const ref of instance.mountedComponents) {
+        if (ref && typeof ref.__id__ === 'number') componentIds.add(ref.__id__);
+      }
+    }
+    if (Array.isArray(instance.mountedChildren)) {
+      for (const ref of instance.mountedChildren) {
+        if (ref && typeof ref.__id__ === 'number') visit(ref.__id__);
+      }
+    }
+  }
+
+  visit(rootNodeId);
+  return { nodeIds, componentIds };
 }
 
 function _deepClone(obj) {

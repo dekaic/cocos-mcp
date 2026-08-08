@@ -27,6 +27,21 @@ function requireNode(uuid, label) {
     return node;
 }
 
+function findComponent(uuid) {
+    var scene = cc.director.getScene();
+    if (!scene) return null;
+    var queue = [scene];
+    while (queue.length > 0) {
+        var node = queue.shift();
+        var components = node.components || [];
+        for (var i = 0; i < components.length; i++) {
+            if (components[i].uuid === uuid) return components[i];
+        }
+        Array.prototype.push.apply(queue, node.children);
+    }
+    return null;
+}
+
 function applyNodeOptions(node, options) {
     if (options.position) {
         node.setPosition(options.position.x || 0, options.position.y || 0, options.position.z || 0);
@@ -46,6 +61,12 @@ function describeNodeTree(node) {
 }
 
 exports.methods = {
+    querySceneState() {
+        var scene = cc.director.getScene();
+        if (!scene) throw new Error('scene is not loaded');
+        return { uuid: scene.uuid, name: scene.name };
+    },
+
     queryNodeTree(uuid) {
         var scene = cc.director.getScene();
         if (!scene) throw new Error('scene is not loaded');
@@ -108,5 +129,41 @@ exports.methods = {
         if (!component) throw new Error('component not found: ' + options.component);
         component.destroy();
         return { uuid: node.uuid, component: options.component, removed: true };
+    },
+
+    createComponent(options) {
+        if (!options || !options.uuid || !options.component) {
+            throw new Error('uuid and component are required');
+        }
+        var node = requireNode(options.uuid, 'node');
+        var ctor = cc.js.getClassByName(options.component);
+        if (!ctor && options.component.indexOf('cc.') === 0) {
+            ctor = cc[options.component.slice(3)];
+        }
+        if (!ctor || !cc.js.isChildClassOf(ctor, cc.Component)) {
+            throw new Error('component class not found: ' + options.component);
+        }
+        var component = node.addComponent(ctor);
+        if (!component) throw new Error('failed to create component: ' + options.component);
+        return {
+            changed: true,
+            nodeUuid: node.uuid,
+            componentUuid: component.uuid,
+            component: options.component,
+        };
+    },
+
+    executeComponentMethod(options) {
+        if (!options || !options.uuid || !options.name) {
+            throw new Error('uuid and name are required');
+        }
+        var component = findComponent(options.uuid);
+        if (!component) throw new Error('component not found: ' + options.uuid);
+        var method = component[options.name];
+        if (typeof method !== 'function') {
+            throw new Error('component method not found: ' + options.name);
+        }
+        var result = method.apply(component, Array.isArray(options.args) ? options.args : []);
+        return { executed: true, componentUuid: component.uuid, name: options.name, result: result };
     },
 };

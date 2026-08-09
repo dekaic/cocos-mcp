@@ -7,8 +7,8 @@
 修改本仓库前必须阅读并遵循 [`CONTRIBUTING.md`](./CONTRIBUTING.md)。其中的分支、验证、合并、发布与清理规则是唯一权威。
 
 - `main` 只用于稳定集成和发布，不直接承载日常开发。
-- 每项修改从正确基线创建单一职责的 `feat/*`、`fix/*`、`optimize/*`、`docs/*` 或 `hotfix/*` 分支。
-- 2D/3D Lab 是开发和验证环境，`lab/*` 不是正式合并来源；Template 常态固定到稳定标签。
+- 每项修改从正确版本线创建单一职责的 `feat/vX.Y/*`、`fix/vX.Y/*`、`optimize/vX.Y/*`、`docs/*` 或 `hotfix/vX.Y.Z/*` 分支。
+- 2D/3D Lab 是开发和验证环境，不使用带 `2d`、`3d` 标签的长期分支；空闲时固定稳定标签或 `release/vX.Y`。Template 常态固定到稳定标签。
 - 同一个分支不能同时签出到多个 worktree；跨项目验证使用相同提交 SHA。
 - detached HEAD 上需要修改时，必须先创建分支。
 - `mcp-sdk` 有修改时先提交并推送子模块分支，再提交父仓库指针。

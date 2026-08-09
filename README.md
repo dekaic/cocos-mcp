@@ -14,6 +14,7 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
 | 文档 | 内容 | 阅读时机 |
 |---|---|---|
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | **贡献与分支规范**：分支命名、worktree 职责、验证矩阵、合并与发布 | 修改本仓库或维护多个项目版本前 |
 | [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：多项目 MCP 绑定、HTTP fallback、预览 URL、CLI/MCP 分工 | agent 使用本插件前 |
 | [`QUICK-REF.md`](./QUICK-REF.md) | **一页速查表**：节点定位三式、场景 → op 对照、ops.json 速记、踩坑表 | agent 起手第一份，挑不到再翻 cli.md |
 | [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、34 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |

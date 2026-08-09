@@ -16,46 +16,44 @@
 | 模式 | 基线 | 用途 | 生命周期 |
 |---|---|---|---|
 | `main` | — | 唯一稳定主线 | 永久 |
-| `feat/<scope>/<topic>` | 最新 `main` | 新能力 | 合并后删除 |
-| `fix/<scope>/<topic>` | 最新 `main` | 普通缺陷修复 | 合并后删除 |
-| `optimize/<scope>/<topic>` | 最新 `main` | 性能、可靠性或工作流优化 | 合并后删除 |
+| `feat/v<major>.<minor>/<topic>` | 目标版本线 | 新能力 | 合并后删除 |
+| `fix/v<major>.<minor>/<topic>` | 目标版本线 | 普通缺陷修复 | 合并后删除 |
+| `optimize/v<major>.<minor>/<topic>` | 目标版本线 | 性能、可靠性或工作流优化 | 合并后删除 |
 | `docs/<topic>` | 最新 `main` | 独立文档修改 | 合并后删除 |
-| `hotfix/v<major>.<minor>/<topic>` | 对应稳定标签或维护分支 | 已发布版本补丁 | 发布并前向合并后删除 |
-| `lab/2d-next` | 最新 `main` | 2D 临时组合验证 | 可随时重建 |
-| `lab/3d-next` | 最新 `main` | 3D 临时组合验证 | 可随时重建 |
+| `hotfix/v<major>.<minor>.<patch>/<topic>` | 对应稳定标签或维护分支 | 已发布版本补丁 | 发布并前向合并后删除 |
 | `integration/v<major>.<minor>` | 最新 `main` | 跨范围发布候选组合验证 | 发布后删除 |
-| `release/v<major>.<minor>` | 稳定标签 | 仅用于并行维护旧版本 | 结束维护后删除 |
+| `release/v<major>.<minor>` | 最新稳定提交或标签 | 稳定维护线 | 结束维护后删除 |
 
-`scope` 优先使用 `core`、`2d`、`3d`；需要更精确时可以使用 `cli`、`router`、`server` 或 `sdk`。例如：
+`v<major>.<minor>` 表示目标版本线，精确发布版本由 `v<major>.<minor>.<patch>` 标签表示。分支不使用 `2d`、`3d` 等项目环境作为命名标签；模块或能力范围写入 `topic`。例如：
 
 ```text
-feat/2d/prefab-layout-tools
-fix/3d/scene-component-query
-fix/core/scene-property-dump-path
-optimize/router/editor-discovery
-hotfix/v2.1/scene-property-dump-path
+release/v2.1
+feat/v3.0/project-scoped-routing
+fix/v2.1/scene-property-dump-path
+optimize/v2.1/router-editor-discovery
+hotfix/v2.1.0/scene-property-dump-path
 ```
 
-版本号或 Lab 名不能替代任务主题。涉及 Router、Server、CLI、协议、安全、事务或多项目路由的共享改动应归入 `core` 或对应共享模块，不能因为最先在 3D Lab 开发就归类为 3D 专属改动。
+版本线不能替代任务主题。改动即使最先在某个 Lab 开发，分支名也只表达目标版本和任务；实际影响 2D、3D 或共享模块的范围记录在提交说明、合并说明和验证结果中。
 
 ## 项目与 worktree 职责
 
 | 环境 | 常态 | 允许的操作 |
 |---|---|---|
 | 主仓库 worktree | `main` | 合并、发布、打标签；不直接开发 |
-| 2D MCP Lab | `feat/2d/*`、`fix/2d/*`、`optimize/2d/*` 或候选 SHA | 2D 开发与验证 |
-| 3D MCP Lab | `feat/3d/*`、`fix/3d/*`、`optimize/3d/*` 或候选 SHA | 3D 开发与验证 |
+| 2D MCP Lab | 稳定标签、`release/vX.Y`、版本任务分支或候选 SHA | 2D 开发与验证 |
+| 3D MCP Lab | 稳定标签、`release/vX.Y`、版本任务分支或候选 SHA | 3D 开发与验证 |
 | 2D Template | 发布标签的 detached HEAD | 稳定使用与回归 |
 | 3D Template | 发布标签的 detached HEAD | 稳定使用与回归 |
 
 在 detached HEAD 上发现问题时，先从正确基线创建任务分支再修改。不要在 detached HEAD 上留下提交。
 
-`lab/*-next` 和 `integration/*` 只用于组合测试。正式合并应回到各个任务分支逐项进入 `main`，避免把未完成实验一起带入。
+Lab 目录没有专属长期分支。空闲时固定稳定标签或维护线，开发时签出目标版本的任务分支。`integration/*` 只用于组合测试；正式合并应回到各个任务分支逐项进入 `main`，避免把未完成实验一起带入。
 
 ## 开发流程
 
 1. 获取最新远端状态，确认所有相关 worktree 干净。
-2. 从最新 `main` 创建单一职责的任务分支。
+2. 从目标版本线创建单一职责的任务分支：下一版本通常基于最新 `main`，稳定版修复基于对应 `release/vX.Y` 或标签。
 3. 在发现问题的 Lab 中实现，并为缺陷增加可复现的回归测试。
 4. 保持提交可理解、可回滚；不要混入项目资源或无关格式化。
 5. 按验证矩阵测试同一个候选提交 SHA。
@@ -99,7 +97,7 @@ hotfix/v2.1/scene-property-dump-path
 
 稳定 Template 暴露已发布版本问题时：
 
-1. 从对应稳定标签创建 `hotfix/vX.Y/<topic>`；
+1. 从对应稳定标签创建 `hotfix/vX.Y.Z/<topic>`；
 2. 在受影响 Template 中复现并修复；
 3. 在当前 `main` 前向验证同一修复；
 4. 合并补丁并更新版本号；

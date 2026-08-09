@@ -188,6 +188,54 @@ test('scene_set_property returns a verified before/after result', async () => {
     });
 });
 
+test('scene_set_property resolves component fields through Inspector value wrappers', async () => {
+    const calls = [];
+    let queryCount = 0;
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[1] === 'query-node') {
+                queryCount++;
+                return {
+                    __comps__: [{
+                        value: {
+                            uiRoot: {
+                                type: 'cc.Node',
+                                value: { uuid: queryCount === 1 ? '' : 'ui-root-uuid' },
+                            },
+                        },
+                    }],
+                };
+            }
+            return true;
+        },
+        local: {},
+    });
+    const tool = tools.find((item) => item.name === 'scene_set_property');
+    const result = await tool.handler({
+        uuid: 'feature-node',
+        path: '__comps__.0.uiRoot',
+        dump: { type: 'cc.Node', value: { uuid: 'ui-root-uuid' } },
+    });
+
+    assert.deepEqual(result, {
+        changed: true,
+        target: 'feature-node',
+        path: '__comps__.0.uiRoot',
+        before: { uuid: '' },
+        after: { uuid: 'ui-root-uuid' },
+    });
+    assert.deepEqual(
+        calls.find((call) => call[1] === 'set-property'),
+        ['scene', 'set-property', {
+            uuid: 'feature-node',
+            path: '__comps__.0.uiRoot',
+            dump: { type: 'cc.Node', value: { uuid: 'ui-root-uuid' } },
+        }]
+    );
+});
+
 test('scene_execute_component_method routes through strict component validation', async () => {
     const calls = [];
     const tools = defineTools({

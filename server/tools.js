@@ -53,6 +53,19 @@ function defineTools(ctx) {
         var current = dump;
         var parts = String(pathText).split('.').filter(Boolean);
         for (var i = 0; i < parts.length; i++) {
+            // Inspector wraps component and nested value dumps in { value: ... },
+            // while set-property still expects the logical path without ".value".
+            // Only unwrap when the requested segment is absent so explicit value
+            // paths and ordinary objects that happen to own a value field still work.
+            while (
+                current !== null &&
+                current !== undefined &&
+                typeof current === 'object' &&
+                !Object.prototype.hasOwnProperty.call(current, parts[i]) &&
+                Object.prototype.hasOwnProperty.call(current, 'value')
+            ) {
+                current = current.value;
+            }
             if (current === null || current === undefined || !Object.prototype.hasOwnProperty.call(current, parts[i])) {
                 return { found: false, value: undefined };
             }

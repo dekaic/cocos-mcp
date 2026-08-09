@@ -196,6 +196,12 @@ function getEditOptions(args, toolName) {
         }
         options.dryRun = args.dryRun;
     }
+    if (args.expectedHash !== undefined) {
+        if (typeof args.expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(args.expectedHash)) {
+            throw new Error('[' + toolName + '] expectedHash 必须是 64 位小写 SHA-256');
+        }
+        options.expectedHash = args.expectedHash;
+    }
     return options;
 }
 
@@ -214,7 +220,8 @@ var OFFLINE_TOOLS = [
             '  node → name 按名称查单节点，withComps 可展开组件\n' +
             '  find → nodeType 返回所有匹配 __type__ 的元素 id\n' +
             '  field → name + componentType + field 读取组件字段\n' +
-            '  overrides → node 查询 stub 的 propertyOverrides 和 rootTargetOverrides',
+            '  overrides → node 查询 stub 的 propertyOverrides 和 rootTargetOverrides\n' +
+            '返回 structuredContent.revision，可作为下一次 prefab_edit 的 expectedHash。',
         inputSchema: {
             type: 'object',
             properties: {
@@ -269,6 +276,11 @@ var OFFLINE_TOOLS = [
                     type: 'string',
                     description: '项目根目录绝对路径（包含 assets/），用于 UUID / @ccclass / 相对 path 解析',
                 },
+                expectedHash: {
+                    type: 'string',
+                    pattern: '^[a-f0-9]{64}$',
+                    description: '上次查询/编辑得到的 SHA-256 revision；文件已变化时拒绝覆盖。',
+                },
             },
             required: ['filePath', 'ops'],
         },
@@ -296,6 +308,11 @@ var OFFLINE_TOOLS = [
                 projectRoot: {
                     type: 'string',
                     description: '项目根目录绝对路径（包含 assets/），用于 UUID / @ccclass / 相对 path 解析',
+                },
+                expectedHash: {
+                    type: 'string',
+                    pattern: '^[a-f0-9]{64}$',
+                    description: '上次查询/编辑得到的 SHA-256 revision；文件已变化时拒绝覆盖。',
                 },
             },
             required: ['filePath', 'opsJsonPath'],
@@ -330,18 +347,20 @@ async function handleOfflineToolCall(name, args) {
 
     if (name === 'prefab_query') {
         requireAbsolutePath(args.filePath, 'prefab_query');
-        var result = cli.queryPrefab(args.filePath, args.selector);
+        var snapshot = cli.queryPrefabWithRevision(args.filePath, args.selector);
         return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            content: [{ type: 'text', text: JSON.stringify(snapshot.result, null, 2) }],
+            structuredContent: { revision: snapshot.revision },
         };
     }
 
     if (name === 'prefab_edit') {
         requireAbsolutePath(args.filePath, 'prefab_edit');
+        var editOptions = getEditOptions(args, 'prefab_edit');
         if (!Array.isArray(args.ops) || args.ops.length === 0) {
             throw new Error('[prefab_edit] ops 必须是非空数组');
         }
-        var editResult = cli.editPrefab(args.filePath, args.ops, getEditOptions(args, 'prefab_edit'));
+        var editResult = cli.editPrefab(args.filePath, args.ops, editOptions);
         return {
             content: [{ type: 'text', text: JSON.stringify(editResult, null, 2) }],
         };
@@ -350,6 +369,7 @@ async function handleOfflineToolCall(name, args) {
     if (name === 'prefab_batch') {
         requireAbsolutePath(args.filePath, 'prefab_batch');
         requireAbsolutePath(args.opsJsonPath, 'prefab_batch');
+        var batchOptions = getEditOptions(args, 'prefab_batch');
         var opsRaw = fs.readFileSync(args.opsJsonPath, 'utf-8');
         var ops;
         try {
@@ -360,7 +380,7 @@ async function handleOfflineToolCall(name, args) {
         if (!Array.isArray(ops) || ops.length === 0) {
             throw new Error('[prefab_batch] opsJsonPath 文件内容必须是非空数组');
         }
-        var batchResult = cli.editPrefab(args.filePath, ops, getEditOptions(args, 'prefab_batch'));
+        var batchResult = cli.editPrefab(args.filePath, ops, batchOptions);
         return {
             content: [{ type: 'text', text: JSON.stringify(batchResult, null, 2) }],
         };

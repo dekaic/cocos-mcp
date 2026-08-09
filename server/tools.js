@@ -10,6 +10,13 @@ function defineTools(ctx) {
     var msg = ctx.msg;   // async (target, name, ...args) => result
     var local = ctx.local; // { getPreviewUrl, doReimport, doRefreshAssets, doReloadScene, listWorktrees, openDevDir, cleanDevDir, getStatus }
     var sceneTimeoutMs = Number.isFinite(ctx.sceneTimeoutMs) ? ctx.sceneTimeoutMs : 15000;
+    var sceneOperations = new Map();
+    var OPERATION_ID_PROPERTY = {
+        type: 'string',
+        minLength: 8,
+        maxLength: 128,
+        description: '调用方生成的唯一操作 ID。网络重试必须复用同一个 ID，防止重复创建/删除。',
+    };
 
     function requireString(args, key) {
         if (!args || typeof args[key] !== 'string' || args[key].trim().length === 0) {
@@ -85,6 +92,22 @@ function defineTools(ctx) {
         return JSON.stringify(left) === JSON.stringify(right);
     }
 
+    function stableValue(value) {
+        if (Array.isArray(value)) return value.map(stableValue);
+        if (!value || typeof value !== 'object') return value;
+        var out = {};
+        Object.keys(value).sort().forEach(function (key) { out[key] = stableValue(value[key]); });
+        return out;
+    }
+
+    function requireOperationId(args) {
+        var operationId = requireString(args, 'operationId');
+        if (operationId.length < 8 || operationId.length > 128) {
+            throw new Error('operationId length must be between 8 and 128 characters');
+        }
+        return operationId;
+    }
+
     async function queryCurrentSceneAsset() {
         var state = await sceneRequest('execute-scene-script', {
             name: 'cocos-mcp',
@@ -96,10 +119,18 @@ function defineTools(ctx) {
         return { state: state, info: info };
     }
 
+    async function queryNodeContext(uuid) {
+        return await sceneRequest('execute-scene-script', {
+            name: 'cocos-mcp',
+            method: 'queryNodeContext',
+            args: [uuid],
+        });
+    }
+
     // execute-scene-script runs inside the Scene process and bypasses the
     // Inspector's normal undo/dirty path. Wrap structural edits in an editor
     // recording so they are persisted by scene_save_scene and can be undone.
-    async function runSceneMutation(method, args, recordUuids) {
+    async function performSceneMutation(method, args, recordUuids) {
         var undoId = await sceneRequest('begin-recording', recordUuids);
         try {
             var result = await sceneRequest('execute-scene-script', {
@@ -119,6 +150,65 @@ function defineTools(ctx) {
             }
             throw error;
         }
+    }
+
+    function trimSceneOperations() {
+        if (sceneOperations.size <= 256) return;
+        for (var pair of sceneOperations) {
+            if (pair[1].status !== 'running') {
+                sceneOperations.delete(pair[0]);
+                if (sceneOperations.size <= 256) return;
+            }
+        }
+    }
+
+    function runSceneMutation(method, args, recordUuids) {
+        var operationId = requireOperationId(args);
+        var forwardedArgs = Object.assign({}, args);
+        delete forwardedArgs.operationId;
+        var signature = JSON.stringify(stableValue({ method: method, args: forwardedArgs }));
+        var existing = sceneOperations.get(operationId);
+        if (existing) {
+            if (existing.signature !== signature) {
+                throw new Error('operationId "' + operationId + '" was already used with different arguments');
+            }
+            return existing.promise;
+        }
+
+        var entry = {
+            operationId: operationId,
+            method: method,
+            signature: signature,
+            status: 'running',
+            startedAt: new Date().toISOString(),
+            promise: null,
+        };
+        // recording target 的查询也必须放在去重命中之后。尤其 removeNode 成功后节点已不存在，
+        // 若网络重试先重新 query context，会在读到 journal 之前误报 node not found。
+        entry.promise = Promise.resolve().then(function () {
+            return typeof recordUuids === 'function' ? recordUuids() : recordUuids;
+        }).then(function (resolvedRecordUuids) {
+            return performSceneMutation(method, forwardedArgs, resolvedRecordUuids);
+        }).then(function (result) {
+            entry.status = 'succeeded';
+            entry.completedAt = new Date().toISOString();
+            entry.result = result;
+            if (result && typeof result === 'object' && !Array.isArray(result)) {
+                return Object.assign({ operationId: operationId }, result);
+            }
+            return { operationId: operationId, result: result };
+        }, function (error) {
+            entry.status = 'failed';
+            entry.completedAt = new Date().toISOString();
+            entry.error = error && error.message || String(error);
+            entry.uncertain = /timed out/i.test(entry.error);
+            throw error;
+        });
+        // 立即挂 rejection observer，避免请求方断开时出现未处理 rejection；返回的 promise 仍保持 rejected。
+        entry.promise.catch(function () {});
+        sceneOperations.set(operationId, entry);
+        trimSceneOperations();
+        return entry.promise;
     }
 
     return [
@@ -170,8 +260,9 @@ function defineTools(ctx) {
                         properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
                     },
                     active: { type: 'boolean' },
+                    operationId: OPERATION_ID_PROPERTY,
                 },
-                required: ['parentUuid', 'name'],
+                required: ['parentUuid', 'name', 'operationId'],
             },
             handler: async function (args) {
                 requireString(args, 'parentUuid');
@@ -193,8 +284,9 @@ function defineTools(ctx) {
                         properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
                     },
                     active: { type: 'boolean' },
+                    operationId: OPERATION_ID_PROPERTY,
                 },
-                required: ['sourceUuid', 'parentUuid'],
+                required: ['sourceUuid', 'parentUuid', 'operationId'],
             },
             handler: async function (args) {
                 requireString(args, 'sourceUuid');
@@ -207,12 +299,18 @@ function defineTools(ctx) {
             description: '从当前场景移除指定节点及其子树；不能移除 Scene 根。',
             inputSchema: {
                 type: 'object',
-                properties: { uuid: { type: 'string', description: '目标节点 uuid' } },
-                required: ['uuid'],
+                properties: {
+                    uuid: { type: 'string', description: '目标节点 uuid' },
+                    operationId: OPERATION_ID_PROPERTY,
+                },
+                required: ['uuid', 'operationId'],
             },
             handler: async function (args) {
                 requireString(args, 'uuid');
-                return await runSceneMutation('removeNode', args, [args.uuid]);
+                return await runSceneMutation('removeNode', args, async function () {
+                    var context = await queryNodeContext(args.uuid);
+                    return [args.uuid, context.parentUuid].filter(Boolean);
+                });
             },
         },
         {
@@ -227,13 +325,17 @@ function defineTools(ctx) {
                         type: 'object',
                         properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
                     },
+                    operationId: OPERATION_ID_PROPERTY,
                 },
-                required: ['uuid', 'parentUuid'],
+                required: ['uuid', 'parentUuid', 'operationId'],
             },
             handler: async function (args) {
                 requireString(args, 'uuid');
                 requireString(args, 'parentUuid');
-                return await runSceneMutation('reparentNode', args, [args.uuid, args.parentUuid]);
+                return await runSceneMutation('reparentNode', args, async function () {
+                    var context = await queryNodeContext(args.uuid);
+                    return [args.uuid, context.parentUuid, args.parentUuid].filter(Boolean);
+                });
             },
         },
         {
@@ -244,8 +346,9 @@ function defineTools(ctx) {
                 properties: {
                     uuid: { type: 'string', description: '目标节点 uuid' },
                     component: { type: 'string', description: '组件类名，如 cc.LabelOutline' },
+                    operationId: OPERATION_ID_PROPERTY,
                 },
-                required: ['uuid', 'component'],
+                required: ['uuid', 'component', 'operationId'],
             },
             handler: async function (args) {
                 requireString(args, 'uuid');
@@ -261,8 +364,9 @@ function defineTools(ctx) {
                 properties: {
                     uuid: { type: 'string', description: '目标节点 uuid' },
                     component: { type: 'string', description: 'Cocos 组件类名，如 cc.UISkew' },
+                    operationId: OPERATION_ID_PROPERTY,
                 },
-                required: ['uuid', 'component'],
+                required: ['uuid', 'component', 'operationId'],
             },
             handler: async function (args) {
                 var uuid = requireString(args, 'uuid');
@@ -356,6 +460,30 @@ function defineTools(ctx) {
             },
         },
         {
+            name: 'scene_query_operation',
+            description: '查询本次 Editor 实例内结构修改的去重状态。超时结果 uncertain=true 时，应查询场景确认，不要换新 operationId 重试。',
+            inputSchema: {
+                type: 'object',
+                properties: { operationId: OPERATION_ID_PROPERTY },
+                required: ['operationId'],
+            },
+            handler: async function (args) {
+                var operationId = requireOperationId(args);
+                var entry = sceneOperations.get(operationId);
+                if (!entry) throw new Error('operation not found in this editor instance: ' + operationId);
+                return {
+                    operationId: operationId,
+                    method: entry.method,
+                    status: entry.status,
+                    startedAt: entry.startedAt,
+                    completedAt: entry.completedAt || null,
+                    result: entry.result,
+                    error: entry.error,
+                    uncertain: !!entry.uncertain,
+                };
+            },
+        },
+        {
             name: 'scene_execute_component_method',
             description: '调用指定组件 UUID 上的方法；会校验组件和方法存在，并通过 undo recording 执行。',
             inputSchema: {
@@ -364,8 +492,9 @@ function defineTools(ctx) {
                     uuid: { type: 'string' },
                     name: { type: 'string', description: '方法名' },
                     args: { type: 'array', items: {} },
+                    operationId: OPERATION_ID_PROPERTY,
                 },
-                required: ['uuid', 'name'],
+                required: ['uuid', 'name', 'operationId'],
             },
             handler: async function (args) {
                 var uuid = requireString(args, 'uuid');
@@ -375,6 +504,7 @@ function defineTools(ctx) {
                     uuid: uuid,
                     name: args.name,
                     args: args.args || [],
+                    operationId: args.operationId,
                 }, [uuid]);
             },
         },

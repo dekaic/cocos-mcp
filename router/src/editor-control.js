@@ -24,6 +24,9 @@ var os = require('os');
 var http = require('http');
 var cp = require('child_process');
 var crypto = require('crypto');
+var projectIdentity = require('../../shared/project-id.js');
+var canonicalProjectPath = projectIdentity.canonicalProjectPath;
+var projectIdForPath = projectIdentity.projectIdForPath;
 
 var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;          // 与 bin.js 对齐：2 分钟没心跳视为死
@@ -69,6 +72,10 @@ function readRegistryEntries() {
                 var st = fs.statSync(full);
                 var info = JSON.parse(fs.readFileSync(full, 'utf-8'));
                 if (!info) return;
+                if (info.projectPath) {
+                    info.projectPath = canonicalProjectPath(info.projectPath);
+                    info.projectId = info.projectId || projectIdForPath(info.projectPath);
+                }
                 info.stale = (now - st.mtimeMs > STALE_MS);
                 info.mtimeMs = st.mtimeMs;
                 out.push(info);
@@ -107,6 +114,7 @@ function removeRegistryFile(pid) {
 var SPAWN_LOCK_PREFIX = 'spawn-lock-';
 
 function spawnLockPath(projectPath) {
+    projectPath = canonicalProjectPath(projectPath);
     // projectPath 整体做 key：不同 worktree 的同名项目路径不同，各锁各的
     var hash = crypto.createHash('md5').update(String(projectPath)).digest('hex').slice(0, 10);
     var short = sanitize(path.basename(projectPath || 'unknown'));
@@ -173,15 +181,28 @@ function resolveTarget(args) {
         if (byPid.length) return byPid[0];
         throw new Error('editor-control: 没有 pid=' + args.pid + ' 的活跃编辑器。当前活跃：' + describeActive());
     }
+    if (args.projectId) {
+        var byProjectId = entries.filter(function (e) { return e.projectId === args.projectId; });
+        if (byProjectId.length === 1) return byProjectId[0];
+        if (byProjectId.length > 1) {
+            throw new Error('editor-control: projectId=' + args.projectId + ' 有多个活跃实例，拒绝猜测 pid。');
+        }
+        throw new Error('editor-control: 没有 projectId=' + args.projectId + ' 的活跃编辑器。当前活跃：' + describeActive());
+    }
     if (args.projectPath) {
-        var byPath = entries.filter(function (e) { return e.projectPath === args.projectPath; });
-        if (byPath.length) return byPath[0];
+        var wantedPath = canonicalProjectPath(args.projectPath);
+        var byPath = entries.filter(function (e) { return e.projectPath === wantedPath; });
+        if (byPath.length === 1) return byPath[0];
+        if (byPath.length > 1) {
+            throw new Error('editor-control: projectPath=' + wantedPath + ' 有多个活跃实例，拒绝猜测 pid。');
+        }
         throw new Error('editor-control: 没有 projectPath=' + args.projectPath + ' 的活跃编辑器。当前活跃：' + describeActive());
     }
     if (args.shortName) {
         var want = sanitize(args.shortName);
         var byName = entries.filter(function (e) { return sanitize(e.projectShortName) === want; });
-        if (byName.length) return byName[0];
+        if (byName.length === 1) return byName[0];
+        if (byName.length > 1) throw new Error('editor-control: shortName=' + args.shortName + ' 不唯一，请改传 projectId。');
         throw new Error('editor-control: 没有 shortName=' + args.shortName + ' 的活跃编辑器。当前活跃：' + describeActive());
     }
     // 无指定
@@ -459,14 +480,16 @@ function spawnEditor(execPath, projectPath, opts) {
 // ── 就绪探测 ────────────────────────────────────────────────────
 
 /** 通用 HTTP MCP 调用，返回完整 JSON-RPC 响应（失败返回 null）。probeReady/probeProjectReady 共用。 */
-function httpMcp(url, method, params, timeoutMs) {
+function httpMcp(url, authToken, method, params, timeoutMs) {
     return new Promise(function (resolve) {
         try {
             var u = new URL(url);
             var body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params || {} });
+            var headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) };
+            if (authToken) headers.Authorization = 'Bearer ' + authToken;
             var req = http.request({
                 hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+                headers: headers,
                 timeout: timeoutMs || 4000,
             }, function (res) {
                 var chunks = [];
@@ -485,8 +508,8 @@ function httpMcp(url, method, params, timeoutMs) {
 }
 
 /** MCP initialize 探活：能 initialize = MCP server 起来了（但不代表进了项目，登录页态也能起）。 */
-function probeReady(url) {
-    return httpMcp(url, 'initialize', {
+function probeReady(entry) {
+    return httpMcp(entry.url, entry.authToken, 'initialize', {
         protocolVersion: PROTOCOL_VERSION,
         clientInfo: { name: 'editor-control', version: '0' },
         capabilities: {},
@@ -495,13 +518,12 @@ function probeReady(url) {
 
 /**
  * 项目就绪探测：MCP initialize 成功 ≠ 进了项目 —— 实测激进清登录态后 initialize 仍 ready，
- * 但编辑器 UI 卡在登录页。用 asset_query_assets 查 db://assets/* 探 asset-db 是否就绪：
- * 项目真打开才加载 asset-db、返回非空顶层资源；登录页 / 项目加载中则空或失败。
- * 正向（进项目非空）已实测；负向（登录页态返回啥）按逻辑推断，未在登录页态实测。
+ * 但编辑器 UI 可能卡在登录页。查询 db://assets 根资源比“必须至少有一个 asset”更可靠：
+ * 空项目同样合法；只有 asset-db 能成功解析根资源才算项目就绪。
  */
-function probeProjectReady(url) {
-    return httpMcp(url, 'tools/call', {
-        name: 'asset_query_assets', arguments: { pattern: 'db://assets/*' },
+function probeProjectReady(entry) {
+    return httpMcp(entry.url, entry.authToken, 'tools/call', {
+        name: 'asset_query_info', arguments: { urlOrUUID: 'db://assets' },
     }, 6000).then(function (r) {
         return hasReadyAssetResult(r);
     });
@@ -530,6 +552,7 @@ function hasReadyAssetText(txt) {
         if (Array.isArray(parsed)) return parsed.length > 0;
         if (parsed && Array.isArray(parsed.content)) return parsed.content.length > 0;
         if (parsed && Array.isArray(parsed.assets)) return parsed.assets.length > 0;
+        if (parsed && typeof parsed === 'object') return true;
     } catch (e) {
         return false;
     }
@@ -544,6 +567,7 @@ function hasReadyAssetText(txt) {
  */
 async function waitReady(projectPath, opts) {
     opts = opts || {};
+    projectPath = canonicalProjectPath(projectPath);
     var timeoutMs = opts.timeoutMs || 90000;   // 大项目冷启动慢，默认 90s
     var excludePid = opts.excludePid || 0;
     var requireProject = opts.requireProject !== false;   // 默认要求项目就绪（区分登录页/加载中），传 false 退回只看 MCP
@@ -557,14 +581,16 @@ async function waitReady(projectPath, opts) {
         })[0];
 
         if (hit) {
-            var mcpOk = await probeReady(hit.url);
+            var mcpOk = await probeReady(hit);
             if (mcpOk) {
                 sawMcp = true;
-                var projOk = requireProject ? await probeProjectReady(hit.url) : true;
+                var projOk = requireProject ? await probeProjectReady(hit) : true;
                 if (projOk) {
                     return {
                         ready: true, mcpReady: true, projectReady: projOk,
                         entry: {
+                            projectId: hit.projectId,
+                            instanceId: hit.instanceId,
                             shortName: sanitize(hit.projectShortName),
                             pid: hit.pid, url: hit.url, port: hit.port,
                             projectPath: hit.projectPath, editorVersion: hit.editorVersion,
@@ -591,6 +617,7 @@ async function waitReady(projectPath, opts) {
 // ── Tool 定义 ───────────────────────────────────────────────────
 
 var COMMON_TARGET_PROPS = {
+    projectId: { type: 'string', description: '稳定项目 ID（router_list_editors 返回），运行中实例的首选定位方式。' },
     shortName: { type: 'string', description: '编辑器短名（工具前缀名，如 my-project）。只有一个编辑器时可省略。' },
     projectPath: { type: 'string', description: '项目绝对路径，定位最精确。编辑器未运行时（restart/wait_ready）必须用它。' },
     noLogin: { type: 'boolean', description: '拉起/重启编辑器时追加 Cocos 内置 --nologin，默认 true；传 false 禁用。' },
@@ -609,6 +636,7 @@ var EDITOR_TOOLS = [
             type: 'object',
             properties: {
                 shortName: COMMON_TARGET_PROPS.shortName,
+                projectId: COMMON_TARGET_PROPS.projectId,
                 projectPath: COMMON_TARGET_PROPS.projectPath,
                 pid: { type: 'number', description: '直接按 pid 定位要重启的编辑器。' },
                 hard: { type: 'boolean', description: 'true=直接 SIGKILL，不给优雅退出窗口。默认 false（先 SIGTERM）。' },
@@ -627,6 +655,7 @@ var EDITOR_TOOLS = [
             type: 'object',
             properties: {
                 shortName: COMMON_TARGET_PROPS.shortName,
+                projectId: COMMON_TARGET_PROPS.projectId,
                 projectPath: COMMON_TARGET_PROPS.projectPath,
                 timeoutMs: { type: 'number', description: '超时（毫秒），默认 90000。' },
                 excludePid: { type: 'number', description: '排除某个 pid（如刚被 kill 的旧实例），避免误判旧注册为就绪。' },
@@ -642,6 +671,7 @@ var EDITOR_TOOLS = [
             type: 'object',
             properties: {
                 shortName: COMMON_TARGET_PROPS.shortName,
+                projectId: COMMON_TARGET_PROPS.projectId,
                 projectPath: COMMON_TARGET_PROPS.projectPath,
                 pid: { type: 'number', description: '直接按 pid 定位。' },
                 hard: { type: 'boolean', description: 'true=直接 SIGKILL。默认 false。' },
@@ -707,6 +737,7 @@ async function handleEditorToolCall(name, args) {
 
             return jsonContent({
                 action: 'restart',
+                projectId: target.projectId,
                 shortName: sanitize(target.projectShortName),
                 projectPath: projectPath,
                 execPath: execPath,
@@ -724,9 +755,11 @@ async function handleEditorToolCall(name, args) {
     if (name === 'editor_wait_ready') {
         var pp = args.projectPath;
         if (!pp) {
-            // 没给 projectPath：尝试从活跃实例（可选 shortName 过滤）推断
+            // 没给 projectPath：尝试从活跃实例（优先 projectId，其次兼容 shortName）推断
             var act = activeEditors();
-            if (args.shortName) {
+            if (args.projectId) {
+                act = act.filter(function (e) { return e.projectId === args.projectId; });
+            } else if (args.shortName) {
                 var want = sanitize(args.shortName);
                 act = act.filter(function (e) { return sanitize(e.projectShortName) === want; });
             }
@@ -744,13 +777,19 @@ async function handleEditorToolCall(name, args) {
     if (name === 'editor_kill') {
         var t = resolveTarget(args);
         assertNoDebugSession('editor_kill', t, args.force);
-        var res = await killEditor(t.pid, { hard: args.hard, graceMs: args.graceMs });
-        return jsonContent({
-            action: 'kill',
-            shortName: sanitize(t.projectShortName),
-            projectPath: t.projectPath,
-            result: res,
-        }, !res.killed);
+        acquireSpawnLock(t.projectPath);
+        try {
+            var res = await killEditor(t.pid, { hard: args.hard, graceMs: args.graceMs });
+            return jsonContent({
+                action: 'kill',
+                projectId: t.projectId,
+                shortName: sanitize(t.projectShortName),
+                projectPath: t.projectPath,
+                result: res,
+            }, !res.killed);
+        } finally {
+            releaseSpawnLock(t.projectPath);
+        }
     }
 
     if (name === 'editor_spawn') {
@@ -758,6 +797,7 @@ async function handleEditorToolCall(name, args) {
         if (!spProject || !path.isAbsolute(spProject)) {
             throw new Error('editor_spawn: projectPath 必填且必须是绝对路径，收到 ' + JSON.stringify(spProject));
         }
+        spProject = canonicalProjectPath(spProject);
         acquireSpawnLock(spProject);                // 与其他 agent 的 spawn/restart 互斥
         try {
             // 幂等：同项目已有活跃实例直接返回（Cocos 不支持同项目多开）。
@@ -768,6 +808,7 @@ async function handleEditorToolCall(name, args) {
                     action: 'spawn', alreadyRunning: true,
                     entry: {
                         shortName: sanitize(spRunning.projectShortName), pid: spRunning.pid,
+                        projectId: spRunning.projectId, instanceId: spRunning.instanceId,
                         url: spRunning.url, port: spRunning.port, projectPath: spRunning.projectPath,
                     },
                 });

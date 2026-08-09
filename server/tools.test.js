@@ -16,10 +16,10 @@ test('scene_create_component uses the validated scene script with undo recording
     const tool = tools.find(function (item) { return item.name === 'scene_create_component'; });
 
     assert.ok(tool, 'scene_create_component is registered');
-    assert.deepEqual(tool.inputSchema.required, ['uuid', 'component']);
-    assert.equal(
-        await tool.handler({ uuid: 'node-uuid', component: 'cc.UISkew' }),
-        'created'
+    assert.deepEqual(tool.inputSchema.required, ['uuid', 'component', 'operationId']);
+    assert.deepEqual(
+        await tool.handler({ uuid: 'node-uuid', component: 'cc.UISkew', operationId: 'op-create-component-1' }),
+        { operationId: 'op-create-component-1', result: 'created' }
     );
     assert.deepEqual(calls, [
         ['scene', 'begin-recording', ['node-uuid']],
@@ -44,9 +44,78 @@ test('scene mutation preserves the original error when undo cancellation also fa
     });
     const tool = tools.find((item) => item.name === 'scene_create_component');
     await assert.rejects(
-        tool.handler({ uuid: 'node', component: 'Bad' }),
+        tool.handler({ uuid: 'node', component: 'Bad', operationId: 'op-create-component-bad' }),
         /component class not found: Bad/
     );
+});
+
+test('scene mutation reuses operationId result instead of applying twice', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            const args = Array.from(arguments);
+            calls.push(args);
+            if (args[1] === 'begin-recording') return 'undo-dedupe';
+            if (args[1] === 'execute-scene-script') return { uuid: 'created-node' };
+            return true;
+        },
+        local: {},
+    });
+    const add = tools.find((item) => item.name === 'scene_add_node');
+    const query = tools.find((item) => item.name === 'scene_query_operation');
+    const args = { parentUuid: 'parent', name: 'Child', operationId: 'op-dedupe-add-node' };
+
+    const first = await add.handler(args);
+    const second = await add.handler({ name: 'Child', operationId: 'op-dedupe-add-node', parentUuid: 'parent' });
+
+    assert.deepEqual(second, first);
+    assert.equal(calls.filter((call) => call[1] === 'begin-recording').length, 1);
+    assert.equal(calls.filter((call) => call[1] === 'execute-scene-script').length, 1);
+    assert.equal((await query.handler({ operationId: 'op-dedupe-add-node' })).status, 'succeeded');
+});
+
+test('scene mutation rejects operationId reuse with different arguments', async () => {
+    const tools = defineTools({
+        msg: async function (_target, name) {
+            if (name === 'begin-recording') return 'undo-conflict';
+            if (name === 'execute-scene-script') return { uuid: 'created-node' };
+            return true;
+        },
+        local: {},
+    });
+    const add = tools.find((item) => item.name === 'scene_add_node');
+    await add.handler({ parentUuid: 'parent', name: 'A', operationId: 'op-conflicting-id' });
+    await assert.rejects(
+        add.handler({ parentUuid: 'parent', name: 'B', operationId: 'op-conflicting-id' }),
+        /already used with different arguments/
+    );
+});
+
+test('scene_remove_node retry reaches the operation journal before querying a deleted node', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function (_target, name, payload) {
+            calls.push(Array.from(arguments));
+            if (name === 'begin-recording') return 'undo-remove';
+            if (name === 'execute-scene-script' && payload.method === 'queryNodeContext') {
+                return { uuid: 'child', parentUuid: 'parent' };
+            }
+            if (name === 'execute-scene-script' && payload.method === 'removeNode') {
+                return { uuid: 'child', removed: true };
+            }
+            return true;
+        },
+        local: {},
+    });
+    const remove = tools.find((item) => item.name === 'scene_remove_node');
+    const args = { uuid: 'child', operationId: 'op-remove-retry-1' };
+
+    const first = await remove.handler(args);
+    const second = await remove.handler(args);
+
+    assert.deepEqual(second, first);
+    assert.equal(calls.filter((call) => call[1] === 'execute-scene-script' && call[2].method === 'queryNodeContext').length, 1);
+    assert.equal(calls.filter((call) => call[1] === 'execute-scene-script' && call[2].method === 'removeNode').length, 1);
 });
 
 test('scene tools reject missing required arguments before sending IPC', async () => {
@@ -249,8 +318,10 @@ test('scene_execute_component_method routes through strict component validation'
         local: {},
     });
     const tool = tools.find((item) => item.name === 'scene_execute_component_method');
-    const result = await tool.handler({ uuid: 'component-uuid', name: 'rebuild', args: [7] });
-    assert.deepEqual(result, { executed: true, result: 7 });
+    const result = await tool.handler({
+        uuid: 'component-uuid', name: 'rebuild', args: [7], operationId: 'op-component-method-1',
+    });
+    assert.deepEqual(result, { operationId: 'op-component-method-1', executed: true, result: 7 });
     assert.deepEqual(calls, [
         ['scene', 'begin-recording', ['component-uuid']],
         ['scene', 'execute-scene-script', {

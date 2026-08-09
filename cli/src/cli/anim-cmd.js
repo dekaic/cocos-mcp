@@ -102,6 +102,7 @@ op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primiti
     editOptions.rootType = 'cc.AnimationClip';
     if (flags['project-root']) editOptions.projectRoot = resolvePath(flags['project-root']);
     if (flags['dry-run'] === true) editOptions.dryRun = true;
+    if (flags['expected-hash']) editOptions.expectedHash = flags['expected-hash'];
 
     let result;
     try {

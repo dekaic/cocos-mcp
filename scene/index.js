@@ -13,8 +13,8 @@ function findNode(uuid) {
     if (scene.uuid === uuid) return scene;
 
     var queue = scene.children.slice();
-    while (queue.length > 0) {
-        var node = queue.shift();
+    for (var cursor = 0; cursor < queue.length; cursor++) {
+        var node = queue[cursor];
         if (node.uuid === uuid) return node;
         Array.prototype.push.apply(queue, node.children);
     }
@@ -31,8 +31,8 @@ function findComponent(uuid) {
     var scene = cc.director.getScene();
     if (!scene) return null;
     var queue = [scene];
-    while (queue.length > 0) {
-        var node = queue.shift();
+    for (var cursor = 0; cursor < queue.length; cursor++) {
+        var node = queue[cursor];
         var components = node.components || [];
         for (var i = 0; i < components.length; i++) {
             if (components[i].uuid === uuid) return components[i];
@@ -73,6 +73,15 @@ exports.methods = {
         return describeNodeTree(uuid ? requireNode(uuid, 'node') : scene);
     },
 
+    queryNodeContext(uuid) {
+        var node = requireNode(uuid, 'node');
+        return {
+            uuid: node.uuid,
+            parentUuid: node.parent ? node.parent.uuid : null,
+            componentUuids: (node.components || []).map(function (component) { return component.uuid; }),
+        };
+    },
+
     addNode(options) {
         if (!options || !options.parentUuid) throw new Error('parentUuid is required');
         if (!options.name) throw new Error('name is required');
@@ -102,8 +111,11 @@ exports.methods = {
 
         var node = requireNode(options.uuid, 'node');
         if (!node.parent) throw new Error('scene root cannot be removed');
+        var oldParentUuid = node.parent.uuid;
+        node.removeFromParent();
         node.destroy();
-        return { uuid: options.uuid, removed: true };
+        if (findNode(options.uuid)) throw new Error('remove node postcondition failed: ' + options.uuid);
+        return { uuid: options.uuid, oldParentUuid: oldParentUuid, removed: true };
     },
 
     reparentNode(options) {
@@ -114,8 +126,12 @@ exports.methods = {
         var node = requireNode(options.uuid, 'node');
         var parent = requireNode(options.parentUuid, 'parent');
         if (node === parent) throw new Error('node cannot be its own parent');
+        for (var ancestor = parent; ancestor; ancestor = ancestor.parent) {
+            if (ancestor === node) throw new Error('node cannot be reparented under its own descendant');
+        }
         node.setParent(parent);
         applyNodeOptions(node, options);
+        if (node.parent !== parent) throw new Error('reparent postcondition failed: ' + node.uuid);
         return { uuid: node.uuid, name: node.name, parentUuid: parent.uuid };
     },
 
@@ -128,7 +144,9 @@ exports.methods = {
         var component = node.getComponent(options.component);
         if (!component) throw new Error('component not found: ' + options.component);
         component.destroy();
-        return { uuid: node.uuid, component: options.component, removed: true };
+        // Cocos destroy() 在帧末才完成；strictMode=true 会把已进入 ToDestroy 队列的对象视为无效。
+        if (cc.isValid(component, true)) throw new Error('remove component postcondition failed: ' + options.component);
+        return { uuid: node.uuid, component: options.component, componentUuid: component.uuid, removed: true };
     },
 
     createComponent(options) {

@@ -12,11 +12,11 @@
  *   对每个活跃编辑器调 HTTP POST /mcp initialize + tools/list，拿到其 tool 清单
  *
  * 命名：
- *   tool 名前缀化：<projectShortName>__<originalName>
- *   例：my-project__scene_query_node_tree
+ *   每种 Editor tool 只暴露一次，schema 强制 projectId；工具数量不随实例数增长。
+ *   旧 <projectShortName>__<originalName> 仅保留隐藏调用兼容，不进入 tools/list。
  *
  * 转发：
- *   tools/call 收到前缀名 → 拆出 projectShortName → 查 editor URL → HTTP 转发
+ *   tools/call 收到 projectId → 精确匹配唯一 Editor 实例 → 带 bearer token HTTP 转发
  *
  * 客户端接入：
  *   claude mcp add cocos -- node /path/to/forest/extensions/cocos-mcp/router/bin.js
@@ -30,12 +30,15 @@ var http = require('http');
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
 var toolListSignature = require('./src/tool-list-signature.js').toolListSignature;
+var buildProjectScopedToolList = require('./src/project-tools.js').buildProjectScopedToolList;
+var projectIdForPath = require('../shared/project-id.js').projectIdForPath;
 
 var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
 var DISCOVERY_INTERVAL_MS = 15 * 1000;
 var PROTOCOL_VERSION = '2024-11-05';
-var ROUTER_INFO = { name: 'cocos-mcp-router', version: '0.1.0' };
+var ROUTER_INFO = { name: 'cocos-mcp-router', version: '3.0.0' };
+var nextForwardId = 1000;
 
 function logErr() {
     // router 走 stdio，不能往 stdout 写非 JSON-RPC 内容，日志只能走 stderr
@@ -74,18 +77,20 @@ function scanRegistry() {
     return entries;
 }
 
-function httpJsonRpc(targetUrl, body) {
+function httpJsonRpc(targetUrl, body, authToken, timeoutMs) {
     return new Promise(function (resolve, reject) {
         try {
             var u = new URL(targetUrl);
             var data = JSON.stringify(body);
+            var headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) };
+            if (authToken) headers.Authorization = 'Bearer ' + authToken;
             var req = http.request({
                 hostname: u.hostname,
                 port: u.port,
                 path: u.pathname,
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
-                timeout: 8000,
+                headers: headers,
+                timeout: timeoutMs || 8000,
             }, function (res) {
                 var chunks = [];
                 res.on('data', function (c) { chunks.push(c); });
@@ -111,9 +116,9 @@ async function probeEditor(info) {
                 clientInfo: { name: 'cocos-mcp-router', version: ROUTER_INFO.version },
                 capabilities: {},
             },
-        });
+        }, info.authToken);
         if (initRes.error) throw new Error(initRes.error.message);
-        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, info.authToken);
         if (listRes.error) throw new Error(listRes.error.message);
         return listRes.result.tools || [];
     } catch (e) {
@@ -124,7 +129,7 @@ async function probeEditor(info) {
 
 async function probeEditorResources(info) {
     try {
-        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 3, method: 'resources/list' });
+        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 3, method: 'resources/list' }, info.authToken);
         if (listRes.error) throw new Error(listRes.error.message);
         return listRes.result.resources || [];
     } catch (e) {
@@ -137,38 +142,55 @@ function sanitizeShortName(name) {
     return String(name || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-async function discover() {
+var discoverInFlight = null;
+
+function discover() {
+    if (discoverInFlight) return discoverInFlight;
+    discoverInFlight = discoverOnce().finally(function () { discoverInFlight = null; });
+    return discoverInFlight;
+}
+
+async function discoverOnce() {
     var entries = scanRegistry();
     var seen = new Set();
     var beforeSig = toolListSignature(editors.values());   // 改动前的工具签名，末尾比对决定是否通知 claude
-    for (var i = 0; i < entries.length; i++) {
-        var info = entries[i];
-        var key = info.url;
-        seen.add(key);
+    var probed = await Promise.all(entries.map(async function (info) {
+        seen.add(info.url);
         // 已缓存的 editor 也 re-probe：大项目 editor 慢启动（builder worker 没就绪）时，
         // 首次 probe 只拿到部分/空工具；之后 asset-db 就绪、业务工具全激活，必须重新 probe 刷新，
         // 否则 claude 永远看不到后激活的工具（如 forest__preview_refresh_and_reload）。
-        var existing = editors.get(key);
         var tools = await probeEditor(info);
-        if (tools == null) continue;   // probe 失败：保留旧缓存（editor 可能临时忙/重启中），不覆盖
+        if (tools == null) return { info: info, tools: null };
         var resources = await probeEditorResources(info);
+        return { info: info, tools: tools, resources: resources };
+    }));
+
+    probed.forEach(function (probe) {
+        var info = probe.info;
+        var key = info.url;
+        var existing = editors.get(key);
+        if (probe.tools == null) return;   // probe 失败：保留旧缓存（editor 可能临时忙/重启中），不覆盖
         editors.set(key, {
             baseShortName: sanitizeShortName(info.projectShortName),
             shortName: sanitizeShortName(info.projectShortName),   // dedupeShortNames 会按冲突重设
             projectPath: info.projectPath,
+            projectId: info.projectId || projectIdForPath(info.projectPath),
+            instanceId: info.instanceId || ('legacy-pid-' + info.pid),
+            generation: info.generation || 0,
+            authToken: info.authToken || '',
             pid: info.pid,
             startedAt: Date.parse(info.startedAt) || 0,   // 同项目双实例时 dedupe 按它选代表
             url: info.url,
-            tools: tools,
-            resources: resources,
+            tools: probe.tools,
+            resources: probe.resources,
             lastProbed: Date.now(),
         });
         if (!existing) {
-            logErr('discovered editor', info.projectShortName, 'pid=' + info.pid, info.url, tools.length + ' tools');
-        } else if (existing.tools.length !== tools.length) {
-            logErr('editor tools updated', info.projectShortName, existing.tools.length + ' → ' + tools.length + ' tools');
+            logErr('discovered editor', info.projectShortName, 'pid=' + info.pid, info.url, probe.tools.length + ' tools');
+        } else if (existing.tools.length !== probe.tools.length) {
+            logErr('editor tools updated', info.projectShortName, existing.tools.length + ' → ' + probe.tools.length + ' tools');
         }
-    }
+    });
     // 清理已消失的
     for (var key2 of Array.from(editors.keys())) {
         if (!seen.has(key2)) {
@@ -243,20 +265,11 @@ function dedupeShortNames() {
 }
 
 function buildAggregatedToolList() {
-    var out = [];
-    for (var ed of editors.values()) {
-        ed.tools.forEach(function (t) {
-            out.push({
-                name: ed.shortName + '__' + t.name,
-                description: '[' + ed.shortName + '] ' + (t.description || ''),
-                inputSchema: t.inputSchema || { type: 'object', properties: {} },
-            });
-        });
-    }
+    var out = buildProjectScopedToolList(editors.values());
     // router 自身的 meta tool
     out.push({
         name: 'router_list_editors',
-        description: '列出当前 router 发现的所有活跃 Cocos 编辑器（shortName / pid / url / tool 数）',
+        description: '列出当前 Router 发现的 Cocos 编辑器及稳定 projectId。调用 project-scoped 工具前必须先取 projectId。',
         inputSchema: { type: 'object', properties: {} },
     });
     // offline prefab tools（不需要编辑器运行）
@@ -267,13 +280,13 @@ function buildAggregatedToolList() {
 }
 
 function encodeRouterResourceUri(ed, uri) {
-    return 'cocos-router://' + ed.shortName + '/' + encodeURIComponent(uri);
+    return 'cocos-router://' + ed.projectId + '/' + encodeURIComponent(uri);
 }
 
 function decodeRouterResourceUri(uri) {
     var m = String(uri || '').match(/^cocos-router:\/\/([^\/]+)\/(.+)$/);
     if (!m) return null;
-    return { shortName: m[1], uri: decodeURIComponent(m[2]) };
+    return { targetId: m[1], uri: decodeURIComponent(m[2]) };
 }
 
 function buildAggregatedResourceList() {
@@ -282,7 +295,7 @@ function buildAggregatedResourceList() {
         (ed.resources || []).forEach(function (r) {
             out.push({
                 uri: encodeRouterResourceUri(ed, r.uri),
-                name: '[' + ed.shortName + '] ' + (r.name || r.uri),
+                name: '[' + ed.projectId + '] ' + (r.name || r.uri),
                 description: r.description || '',
                 mimeType: r.mimeType || 'text/plain',
             });
@@ -296,6 +309,34 @@ function findEditorByShortName(shortName) {
         if (ed.shortName === shortName) return ed;
     }
     return null;
+}
+
+function findEditorsByProjectId(projectId) {
+    var matches = [];
+    for (var ed of editors.values()) {
+        if (ed.projectId === projectId) matches.push(ed);
+    }
+    return matches;
+}
+
+function resolveProjectTool(projectId, toolName) {
+    if (!projectId) {
+        throw new Error('projectId is required for editor tool "' + toolName + '"; call router_list_editors first');
+    }
+    var matches = findEditorsByProjectId(projectId);
+    if (matches.length === 0) {
+        throw new Error('no active editor for projectId=' + projectId + '; call router_list_editors to refresh targets');
+    }
+    if (matches.length > 1) {
+        throw new Error(
+            'multiple active editors registered for projectId=' + projectId +
+            ' (pids: ' + matches.map(function (ed) { return ed.pid; }).join(', ') + '); refusing ambiguous mutation'
+        );
+    }
+    var editor = matches[0];
+    var offered = (editor.tools || []).some(function (tool) { return tool.name === toolName; });
+    if (!offered) throw new Error('editor ' + projectId + ' does not offer tool "' + toolName + '"');
+    return { editor: editor, originalName: toolName };
 }
 
 function findEditorByPrefixedTool(prefixedName) {
@@ -392,7 +433,16 @@ async function handleToolCall(name, args) {
     if (name === 'router_list_editors') {
         await discover();
         var list = Array.from(editors.values()).map(function (ed) {
-            return { shortName: ed.shortName, pid: ed.pid, url: ed.url, projectPath: ed.projectPath, toolCount: ed.tools.length };
+            return {
+                projectId: ed.projectId,
+                instanceId: ed.instanceId,
+                generation: ed.generation,
+                shortName: ed.shortName,
+                pid: ed.pid,
+                url: ed.url,
+                projectPath: ed.projectPath,
+                toolCount: ed.tools.length,
+            };
         });
         return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] };
     }
@@ -407,21 +457,26 @@ async function handleToolCall(name, args) {
         return await editorControl.handleEditorToolCall(name, args);
     }
 
+    // V3：Editor tool 只暴露一次，以显式 projectId 路由。
+    // 旧 `<shortName>__tool` 不再出现在 tools/list，但仍接受调用，给迁移窗口保留兼容性。
     var hit = findEditorByPrefixedTool(name);
-    if (!hit) {
-        // 可能是新增编辑器，re-discover 再试一次
-        await discover();
-        hit = findEditorByPrefixedTool(name);
+    try {
+        if (!hit) {
+            await discover();
+            hit = findEditorByPrefixedTool(name) || resolveProjectTool(args.projectId, name);
+        }
+    } catch (e) {
+        return { content: [{ type: 'text', text: e.message }], isError: true };
     }
-    if (!hit) {
-        return { content: [{ type: 'text', text: 'unknown tool: ' + name + '\n可用编辑器: ' + Array.from(editors.values()).map(function(e){return e.shortName;}).join(', ') }], isError: true };
-    }
+
+    var forwardedArgs = Object.assign({}, args);
+    delete forwardedArgs.projectId;
 
     try {
         var forward = await httpJsonRpc(hit.editor.url, {
-            jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
-            params: { name: hit.originalName, arguments: args },
-        });
+            jsonrpc: '2.0', id: nextForwardId++, method: 'tools/call',
+            params: { name: hit.originalName, arguments: forwardedArgs },
+        }, hit.editor.authToken, 20000);
         if (forward.error) {
             return { content: [{ type: 'text', text: 'editor error: ' + forward.error.message }], isError: true };
         }
@@ -440,15 +495,16 @@ async function handleResourceRead(uri) {
         return { contents: [{ type: 'text', text: 'unknown router resource uri: ' + uri, mimeType: 'text/plain' }] };
     }
     await discover();
-    var ed = findEditorByShortName(decoded.shortName);
+    var matches = findEditorsByProjectId(decoded.targetId);
+    var ed = matches.length === 1 ? matches[0] : findEditorByShortName(decoded.targetId); // 兼容旧 shortName URI
     if (!ed) {
-        return { contents: [{ type: 'text', text: 'editor not found for resource: ' + decoded.shortName, mimeType: 'text/plain' }] };
+        return { contents: [{ type: 'text', text: 'editor not found for resource: ' + decoded.targetId, mimeType: 'text/plain' }] };
     }
     try {
         var forward = await httpJsonRpc(ed.url, {
-            jsonrpc: '2.0', id: Date.now(), method: 'resources/read',
+            jsonrpc: '2.0', id: nextForwardId++, method: 'resources/read',
             params: { uri: decoded.uri },
-        });
+        }, ed.authToken);
         if (forward.error) {
             return { contents: [{ type: 'text', text: 'editor error: ' + forward.error.message, mimeType: 'text/plain' }] };
         }
@@ -459,7 +515,9 @@ async function handleResourceRead(uri) {
     }
 }
 
-setInterval(function () { discover().catch(function () {}); }, DISCOVERY_INTERVAL_MS);
+var discoveryTimer = setInterval(function () { discover().catch(function () {}); }, DISCOVERY_INTERVAL_MS);
+// stdio 客户端关闭管道后允许 Router 自然退出，避免定时器把孤儿进程永久留在后台。
+if (discoveryTimer.unref) discoveryTimer.unref();
 
 // 启动首次发现
 discover().catch(function (e) { logErr('initial discover failed', e.message); });

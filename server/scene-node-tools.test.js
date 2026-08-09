@@ -48,17 +48,19 @@ test('scene node tools route through the cocos-mcp scene script', async () => {
     const calls = [];
     const tools = createTools(calls);
     const cases = [
-        ['scene_add_node', { parentUuid: 'parent', name: 'Child' }, 'addNode'],
-        ['scene_clone_node', { sourceUuid: 'source', parentUuid: 'parent' }, 'cloneNode'],
-        ['scene_remove_node', { uuid: 'child' }, 'removeNode'],
-        ['scene_reparent_node', { uuid: 'child', parentUuid: 'parent' }, 'reparentNode'],
-        ['scene_remove_component', { uuid: 'child', component: 'cc.LabelOutline' }, 'removeComponent'],
+        ['scene_add_node', { parentUuid: 'parent', name: 'Child', operationId: 'op-add-node-1' }, 'addNode'],
+        ['scene_clone_node', { sourceUuid: 'source', parentUuid: 'parent', operationId: 'op-clone-node-1' }, 'cloneNode'],
+        ['scene_remove_node', { uuid: 'child', operationId: 'op-remove-node-1' }, 'removeNode'],
+        ['scene_reparent_node', { uuid: 'child', parentUuid: 'parent', operationId: 'op-reparent-node-1' }, 'reparentNode'],
+        ['scene_remove_component', { uuid: 'child', component: 'cc.LabelOutline', operationId: 'op-remove-comp-1' }, 'removeComponent'],
     ];
 
     for (const [name, args, method] of cases) {
         const tool = tools.find((item) => item.name === name);
         assert.ok(tool, name + ' is registered');
-        assert.equal(await tool.handler(args), 'ok');
+        assert.deepEqual(await tool.handler(args), { operationId: args.operationId, result: 'ok' });
+        const forwarded = Object.assign({}, args);
+        delete forwarded.operationId;
         assert.deepEqual(calls.splice(-3), [
             ['scene', 'begin-recording', name === 'scene_add_node'
                 ? ['parent']
@@ -67,7 +69,7 @@ test('scene node tools route through the cocos-mcp scene script', async () => {
                     : name === 'scene_reparent_node'
                         ? ['child', 'parent']
                         : ['child']],
-            ['scene', 'execute-scene-script', { name: 'cocos-mcp', method, args: [args] }],
+            ['scene', 'execute-scene-script', { name: 'cocos-mcp', method, args: [forwarded] }],
             ['scene', 'end-recording', 'ok'],
         ]);
     }

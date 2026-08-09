@@ -4,9 +4,17 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
 把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
 
-## 2.1.0 优化分支
+## 3.0.0 V3 Lab
 
-`optimize/mcp-capability-v2.1` 针对 Creator 3.8.x 长驻开发流程收口了一批可复现问题：编辑器就绪判定、`.dev/refresh` 生命周期、Router 工具变更通知、完整 offline schema，以及 Scene/Asset 严格失败语义、Prefab UUID、嵌套 override、标准 AnimationClip、子树提取、批处理原子性和构建产物校验。148 项回归均为自包含测试，不依赖未提交的私有 Prefab fixture。
+V3 把 MCP 从“多实例工具聚合器”升级为显式项目作用域的命令通道：
+
+- Router 为每种 Editor tool 只暴露一份 schema，并要求显式 `projectId`；工具数量不再随编辑器数量整套复制。
+- Editor HTTP 使用每实例随机 bearer token，拒绝未知浏览器 Origin、非 JSON 和超限请求。
+- HTTP 端口由操作系统原子分配；只有真实进入 `listening` 后才写入私有 Registry。
+- 结构 Scene 修改要求 `operationId`，相同 ID 的网络重试不会重复执行。
+- Prefab 写入使用文件锁、SHA-256 revision、同目录临时文件、fsync 和原子 rename。
+
+运行 `npm test` 执行完整自包含回归。
 
 ---
 
@@ -33,6 +41,7 @@ Claude Code (MCP client)
 ┌─────────────────────────────┐
 │  router/bin.js              │  ← 统一入口，聚合多个编辑器
 │  - 扫 ~/.cocos-mcp/editors/ │
+│  - projectId 显式路由       │
 │  - offline prefab tools     │
 └───────────┬─────────────────┘
             │  HTTP MCP (JSON-RPC)
@@ -40,7 +49,7 @@ Claude Code (MCP client)
     │                │
     ▼                ▼
 编辑器实例 A      编辑器实例 B       ← 每个项目一个编辑器进程
-server/mcp-server.js              ← 在 Cocos 编辑器进程内跑 HTTP MCP server
+main.js + mcp-sdk                 ← 在 Cocos 编辑器进程内跑带鉴权 HTTP MCP server
 ```
 
 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行。
@@ -51,7 +60,7 @@ offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 rou
 
 ### 1. 编辑器扩展（`main.js` + panel + server）
 
-在 Cocos Creator 编辑器进程内运行。启动时拉起 `server/mcp-server.js`（HTTP MCP server），并把自身信息写入 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。
+在 Cocos Creator 编辑器进程内运行。启动时通过 `mcp-sdk` 拉起 HTTP MCP server，并把自身信息写入权限为 `0600` 的 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。Registry 中的随机 token 只供本机 Router 使用，不会通过 MCP tool 返回。
 
 **暴露的 tool 域**：
 
@@ -70,16 +79,18 @@ offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 rou
 
 - 扫描 `~/.cocos-mcp/editors/` 发现活跃编辑器（心跳超 120s 视为已死）
 - 每隔 15s 自动发现新实例
-- 给每个编辑器的 tool 加 `<shortName>__` 前缀，合并后暴露给 Claude Code
+- 为每种 Editor tool 只暴露一份 schema；每次调用显式传 `projectId`
 - 内置 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`），不带前缀，全局可用
 
 **tool 路由示例**：
 
 ```
-forest__scene_query_node_tree  →  forest 编辑器的 HTTP MCP server
-another__asset_query_assets    →  another 编辑器的 HTTP MCP server
-prefab_query                   →  router 本地执行（cli），无需编辑器
+router_list_editors()                                      → 查询 projectId
+scene_query_node_tree({ projectId: "project_abcd..." })   → 指定项目的 HTTP MCP server
+prefab_query({ filePath: "/abs/path.prefab" })            → router 本地执行，无需编辑器
 ```
+
+旧 `<shortName>__tool` 名称在 V3 迁移期仍接受调用，但不再出现在 `tools/list`。
 
 ### 3. cocos-mcp-cli（`cli/`）
 
@@ -96,15 +107,8 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | MCP Server | 运行状态指示灯 / 端点地址 / tool 数量 / 请求计数；复制端点、复制 CLI 命令、重启 |
 | 编辑器状态 | 当前分支 / HEAD / 预览地址和端口 / 编辑器 PID / Watcher 状态 / 最后更新时间 |
 | 快捷动作 | 一键刷新（资源+场景+预览）/ 软重载场景 / 打开预览浏览器 / 截图 / 打开 .dev 目录 / 清理临时文件 / 手动输入路径重新导入 |
-| Debug 注入 | 在预览页面执行任意 JS（`eval_js`），结果直接展示；自定义快捷按钮（配置见下方） |
 | 同机 Worktree | 列出同机其他 worktree 及其预览端口，方便多开切换 |
 | 命令日志 | 最近 30 条操作记录（时间 / 来源 / 命令） |
-
-**自定义 Debug 按钮**：在项目根目录新建 `.dev/cc-mcp-panel.json`：
-
-```json
-{ "buttons": [{ "label": "解锁签到", "code": "app.userMod.setUserValue(0,1)" }] }
-```
 
 ---
 
@@ -127,8 +131,11 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `scene_save_scene` | 保存当前场景；未落盘的新场景会拒绝并提示先在 Creator 中命名 |
 | `scene_soft_reload` | 软重载场景，不清编辑器状态 |
 | `scene_execute_component_method` | 按组件 UUID 调用方法；节点 UUID、缺失方法或非组件目标会拒绝 |
+| `scene_query_operation` | 查询结构修改的去重状态；超时且 uncertain 时先查询场景，不要换 ID 重试 |
 
 > 修改 prefab 资源文件属性建议用 `prefab_edit`（offline），`scene_set_property` 只适用于运行时节点或需要编辑器上下文的情况。
+>
+> `scene_add_node`、clone/remove/reparent、组件增删和组件方法调用必须传 8–128 字符的 `operationId`。同一次网络重试复用原 ID。
 
 ### asset-db 域（需编辑器运行）
 
@@ -167,8 +174,8 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 | Tool | 说明 |
 |---|---|
-| `prefab_query` | 查询 prefab 节点树或单节点详情 |
-| `prefab_edit` | 声明式批量编辑 prefab，所有 op 成功后一次性落盘 |
+| `prefab_query` | 查询 prefab；`structuredContent.revision` 返回当前 SHA-256 revision |
+| `prefab_edit` | 声明式批量编辑；可传 `expectedHash`，冲突时拒绝覆盖 |
 | `prefab_batch` | 从 JSON 文件读取 ops 后批量编辑 prefab |
 
 完整 op 列表与配方见 [`doc/cli.md`](./doc/cli.md)。
@@ -184,13 +191,17 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 ```json
 {
   "pid": 12345,
+  "projectId": "project_0123456789abcdef",
+  "instanceId": "...",
+  "generation": 1786269889323,
   "url": "http://127.0.0.1:7788/mcp",
-  "shortName": "forest",
-  "projectPath": "/path/to/project"
+  "projectShortName": "forest",
+  "projectPath": "/path/to/project",
+  "authToken": "<仅本机 Router 读取，文档省略真实值>"
 }
 ```
 
-router 定期扫此目录，心跳超过 120s 的记录视为死亡自动剔除。tool 名以 `<shortName>__` 为前缀隔离，同机多开不冲突。
+Router 定期扫此目录，心跳超过 120s 的记录视为死亡自动剔除。`projectId` 由规范化项目路径生成；同一项目出现多个活跃实例时，V3 拒绝执行歧义调用。
 
 ---
 

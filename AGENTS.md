@@ -31,8 +31,8 @@
 1. 扫描 `~/.cocos-mcp/editors/*.json`。
 2. 只保留 `projectPath` 与当前项目根目录一致的记录。
 3. 校验 `pid` 仍存活。
-4. 多个匹配时取 `updatedAt` 最新的记录。
-5. 后续所有 HTTP MCP 请求都使用该记录的 `url`。
+4. 多个匹配时停止并消除重复实例；禁止按 `updatedAt` 猜一个目标。
+5. 唯一匹配时，后续所有 HTTP MCP 请求都使用该记录的 `url` 和 bearer token。
 
 快速确认脚本：
 
@@ -71,21 +71,26 @@ PY
 
 ## Tool 与 HTTP MCP
 
-如果当前 agent 已注入 router 暴露的 MCP tool，使用带项目名前缀的 tool：
+如果当前 agent 已注入 Router 暴露的 MCP tool，先调用 `router_list_editors`，再把返回的稳定
+`projectId` 显式传给 Editor tool。不要按当前窗口或项目短名猜测：
 
 ```text
-forest__preview_query_url
-forest__asset_reimport
-forest__preview_refresh_and_reload
+router_list_editors({})
+preview_query_url({ projectId: "project_..." })
+asset_reimport({ projectId: "project_...", url: "db://assets/..." })
+preview_refresh_and_reload({ projectId: "project_..." })
 ```
+
+旧 `<shortName>__tool` 只用于 V2 迁移兼容，不再出现在 `tools/list`，新流程不得依赖它。
 
 如果当前 agent 没注入这些 tool，按上节解析当前项目 MCP，再直接调用 HTTP endpoint。
 
-HTTP 调用格式：
+V3 HTTP endpoint 需要 Registry 中的每实例 bearer token。读取时不要打印或记录 token；调用格式：
 
 ```bash
 curl -sS -X POST http://127.0.0.1:<mcp-port>/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <registry-authToken>' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview_query_url","arguments":{}}}'
 ```

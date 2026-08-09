@@ -9,7 +9,7 @@ Usage:
   cocos-mcp-cli query <prefab> [--selector tree|node|find|field] [--name X] [--type cc.Label]
                                 [--comp cc.UITransform] [--field _anchorPoint] [--with-comps]
   cocos-mcp-cli set   <prefab> <nodeName> <field> <value>
-  cocos-mcp-cli batch <prefab> <ops.json> [--project-root <projectRoot>] [--dry-run]
+  cocos-mcp-cli batch <prefab> <ops.json> [--project-root <projectRoot>] [--expected-hash <sha256>] [--dry-run]
   cocos-mcp-cli batch <ops.json>  --glob <pattern> [--project-root <path>] [--dry-run]
   cocos-mcp-cli anim  <subcommand> <file> [args]    # subcommand: query | batch
   cocos-mcp-cli diff  <prefabA> <prefabB>            # 字段级 diff
@@ -40,6 +40,7 @@ Batch options:
                          当 prefab 放在 /tmp/ 等非项目目录时必须显式传入，
                          否则 className → classId 自动规范化会抛错（避免写入 className 字符串导致 cocos MissingScript）。
   --dry-run              不写盘，输出会改的字段 diff（{ path: [old, new] } 形式）。
+  --expected-hash <sha>  乐观并发控制；文件 SHA-256 已变化时拒绝覆盖。
 
 Supported ops:
   set-position / set-label-text / set-sprite-frame / set-active / rename-node

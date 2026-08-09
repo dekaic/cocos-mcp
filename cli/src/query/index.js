@@ -18,9 +18,26 @@ const { queryFind } = require('./find.js');
 const { queryField } = require('./field.js');
 const { queryOverrides } = require('./overrides.js');
 const { normalizeComponentType } = require('../editor/helpers.js');
+const { hashContent } = require('../transaction.js');
 
 function queryPrefab(filePath, selector, options) {
   const prefabData = parsePrefab(filePath, options);
+  return queryParsedPrefab(prefabData, filePath, selector);
+}
+
+/**
+ * 与 queryPrefab 相同，但 revision 直接取自本次解析使用的同一份原始字节，
+ * 避免“查询后再读一次文件”产生结果与 expectedHash 不属于同一快照的竞态。
+ */
+function queryPrefabWithRevision(filePath, selector, options) {
+  const prefabData = parsePrefab(filePath, options);
+  return {
+    result: queryParsedPrefab(prefabData, filePath, selector),
+    revision: hashContent(prefabData.raw),
+  };
+}
+
+function queryParsedPrefab(prefabData, filePath, selector) {
   // overrides 需要按 uuid 反查嵌套 prefab，必须知道 host path 用作 UuidResolver 起点
   prefabData.resolverStartPath = filePath;
 
@@ -58,4 +75,4 @@ function queryPrefab(filePath, selector, options) {
   throw new Error(`queryPrefab: 未知 selector.type "${type}"，支持 tree / node / find / field / overrides`);
 }
 
-module.exports = { queryPrefab };
+module.exports = { queryPrefab, queryPrefabWithRevision };

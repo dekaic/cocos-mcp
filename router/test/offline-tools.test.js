@@ -150,12 +150,14 @@ test('prefab_edit schema 暴露 CLI 全部 op 字段与代表性参数', () => {
     );
 });
 
-test('prefab_edit 和 prefab_batch schema 都暴露 dryRun / projectRoot', () => {
+test('prefab_edit 和 prefab_batch schema 都暴露 dryRun / projectRoot / expectedHash', () => {
     ['prefab_edit', 'prefab_batch'].forEach(function (name) {
         var tool = OFFLINE_TOOLS.find(function (item) { return item.name === name; });
         assert.equal(tool.inputSchema.properties.dryRun.type, 'boolean');
         assert.equal(tool.inputSchema.properties.projectRoot.type, 'string');
         assert.match(tool.inputSchema.properties.projectRoot.description, /绝对路径/);
+        assert.equal(tool.inputSchema.properties.expectedHash.type, 'string');
+        assert.equal(tool.inputSchema.properties.expectedHash.pattern, '^[a-f0-9]{64}$');
     });
 });
 
@@ -189,6 +191,7 @@ test('prefab_query type=tree 返回 MCP content，根节点名称为 FixtureRoot
     var data = JSON.parse(result.content[0].text);
     assert.equal(data.name, 'FixtureRoot', '根节点 name 应为 FixtureRoot');
     assert.ok(Array.isArray(data.children), 'children 应是数组');
+    assert.match(result.structuredContent.revision, /^[a-f0-9]{64}$/);
 });
 
 test('prefab_query 无 selector 默认返回 tree', async () => {
@@ -276,6 +279,31 @@ test('prefab_edit dryRun 返回 diff 且不写回 prefab', async () => {
     assert.equal(data.dryRun, true);
     assert.ok(data.diff.length > 0);
     assert.equal(fs.readFileSync(tmp, 'utf-8'), before);
+});
+
+test('prefab_edit 接受查询 revision，并拒绝过期 expectedHash', async () => {
+    var tmp = makeTmp('edit-revision');
+    var queryResult = await handleOfflineToolCall('prefab_query', {
+        filePath: tmp,
+    });
+    var revision = queryResult.structuredContent.revision;
+
+    var result = await handleOfflineToolCall('prefab_edit', {
+        filePath: tmp,
+        ops: [{ op: 'set-active', node: 'FixtureRoot', active: false }],
+        expectedHash: revision,
+    });
+    var data = JSON.parse(result.content[0].text);
+    assert.equal(data.beforeHash, revision);
+    assert.match(data.afterHash, /^[a-f0-9]{64}$/);
+
+    await assert.rejects(function () {
+        return handleOfflineToolCall('prefab_edit', {
+            filePath: tmp,
+            ops: [{ op: 'set-active', node: 'FixtureRoot', active: true }],
+            expectedHash: revision,
+        });
+    }, /revision conflict/);
 });
 
 test('prefab_edit 将 projectRoot / dryRun 透传给 CLI，相对 path 可解析且不创建 meta', async () => {

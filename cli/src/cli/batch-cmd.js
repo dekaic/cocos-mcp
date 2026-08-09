@@ -1,7 +1,7 @@
 // cli/batch-cmd.js — batch 子命令
 //
 // 用法：
-//   batch <prefab> <ops.json> [--project-root P] [--dry-run]
+//   batch <prefab> <ops.json> [--project-root P] [--expected-hash SHA256] [--dry-run]
 //   batch <ops.json> --glob <pattern> [--project-root P] [--dry-run]
 //
 // --glob：把第一个位置参数当 ops.json，对所有匹配 pattern 的 prefab 跑同一组 ops
@@ -110,9 +110,13 @@ function cmdBatch(args) {
   if (flags['dry-run'] === true) {
     editOptions.dryRun = true;
   }
+  if (flags['expected-hash']) {
+    editOptions.expectedHash = flags['expected-hash'];
+  }
 
   // glob 模式：第一个位置参数当 ops.json
   if (flags['glob']) {
+    if (flags['expected-hash']) die('batch --glob 不接受单一 --expected-hash；每个文件 revision 不同');
     const opsArg = positional[0];
     if (!opsArg) die('batch --glob: 必须提供 <ops.json>');
     const opsPath = resolvePath(opsArg);

@@ -6,6 +6,9 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { hashContent } = require('./transaction.js');
 
 /**
  * 探测原始文件的缩进单位（空格数）
@@ -35,12 +38,32 @@ function detectTrailingNewline(raw) {
  * @param {object[]} data           修改后的 elements 数组
  * @param {string} originalRaw      原始文件内容（用于探测格式）
  */
-function writePrefab(filePath, data, originalRaw) {
+function writePrefab(filePath, data, originalRaw, options) {
   if (!Array.isArray(data)) {
     throw new Error('writePrefab: data 必须是数组');
   }
   if (typeof originalRaw !== 'string') {
     throw new Error('writePrefab: originalRaw 必须是字符串');
+  }
+
+  const opts = options || {};
+  const beforeHash = hashContent(originalRaw);
+  if (opts.expectedHash && opts.expectedHash !== beforeHash) {
+    const expectedConflict = new Error(
+      'prefab revision conflict before edit: expected ' + opts.expectedHash + ', actual ' + beforeHash
+    );
+    expectedConflict.code = 'E_REVISION_CONFLICT';
+    throw expectedConflict;
+  }
+
+  const currentRaw = fs.readFileSync(filePath, 'utf8');
+  const currentHash = hashContent(currentRaw);
+  if (currentHash !== beforeHash) {
+    const concurrentConflict = new Error(
+      'prefab changed while edit was in progress: started at ' + beforeHash + ', now ' + currentHash
+    );
+    concurrentConflict.code = 'E_REVISION_CONFLICT';
+    throw concurrentConflict;
   }
 
   const indent = detectIndent(originalRaw);
@@ -51,7 +74,39 @@ function writePrefab(filePath, data, originalRaw) {
     newRaw += '\n';
   }
 
-  fs.writeFileSync(filePath, newRaw, 'utf8');
+  const afterHash = hashContent(newRaw);
+  if (newRaw === currentRaw) return { beforeHash, afterHash, changed: false };
+
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const tempPath = path.join(
+    dir,
+    '.' + base + '.cocos-mcp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex') + '.tmp'
+  );
+  const mode = fs.statSync(filePath).mode;
+  let fd = null;
+  try {
+    fd = fs.openSync(tempPath, 'wx', mode);
+    fs.writeFileSync(fd, newRaw, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, filePath);
+
+    // 尽力同步目录项；Windows 和部分文件系统不允许打开目录 fd，失败不影响原子替换本身。
+    try {
+      const dirFd = fs.openSync(dir, 'r');
+      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    } catch (_) {}
+  } catch (error) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
+    try { fs.unlinkSync(tempPath); } catch (_) {}
+    throw error;
+  }
+
+  return { beforeHash, afterHash, changed: true };
 }
 
 module.exports = { writePrefab, detectIndent, detectTrailingNewline };

@@ -2,8 +2,10 @@
 
 var fs = require('fs');
 var path = require('path');
+var crypto = require('crypto');
 var { exec } = require('child_process');
 var EXTENSION_VERSION = require('./package.json').version;
+var projectIdentity = require('./shared/project-id.js');
 
 var DEV_DIR = '.dev';
 
@@ -175,6 +177,7 @@ exports.methods = {
     async getMcpConfig() {
         if (!_mcpServer) return { running: false };
         var url = 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp';
+        var routerPath = path.join(__dirname, 'router', 'bin.js');
         return {
             running: _mcpServer.started,
             url: url,
@@ -183,12 +186,12 @@ exports.methods = {
             toolCount: _mcpServer.toolCount,
             resourceCount: _mcpServer.resourceCount,
             stats: _mcpServer.stats,
-            // Claude Code 的 mcp add 命令
-            cliAddCommand: 'claude mcp add cocos --transport http ' + url,
-            // JSON 配置片段
+            directHttpAuthRequired: true,
+            // V3 客户端统一接 Router；不要把 Editor 的 bearer token 写进长期 MCP 配置。
+            cliAddCommand: 'claude mcp add cocos -- node "' + routerPath + '"',
             jsonConfig: {
                 mcpServers: {
-                    cocos: { transport: 'http', url: url },
+                    cocos: { command: 'node', args: [routerPath] },
                 },
             },
         };
@@ -339,9 +342,13 @@ exports.methods = {
 // ── MCP Server ──
 
 var _mcpServer = null;
-var MCP_DEFAULT_PORT = 7523;
+var _mcpStartPromise = null;
 var REGISTRY_DIR = path.join(require('os').homedir(), '.cocos-mcp', 'editors');
 var SDK_PATH = path.join(__dirname, 'mcp-sdk', 'index.js');
+var MCP_MAX_BODY_BYTES = 1024 * 1024;
+var _mcpInstanceId = null;
+var _mcpGeneration = 0;
+var _mcpAuthToken = null;
 
 /**
  * 计算项目短名（MCP 工具名前缀，需能区分不同项目）。
@@ -379,20 +386,30 @@ function getEditorExecPath() {
 function writeRegistry() {
     if (!_mcpServer || !_mcpServer.started) return;
     try {
-        if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+        if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true, mode: 0o700 });
+        var canonicalPath = projectIdentity.canonicalProjectPath(Editor.Project.path);
         var entry = {
             pid: process.pid,
-            projectPath: Editor.Project.path,
+            projectPath: canonicalPath,
+            projectId: projectIdentity.projectIdForPath(canonicalPath),
+            instanceId: _mcpInstanceId,
+            generation: _mcpGeneration,
             projectShortName: getProjectShortName(),
             host: _mcpServer.host,
             port: _mcpServer.port,
             url: 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp',
             editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
             execPath: getEditorExecPath(),
+            extensionVersion: EXTENSION_VERSION,
+            authToken: _mcpAuthToken,
             startedAt: _mcpServer.stats.startedAt,
             updatedAt: new Date().toISOString(),
         };
-        fs.writeFileSync(path.join(REGISTRY_DIR, process.pid + '.json'), JSON.stringify(entry, null, 2), 'utf-8');
+        var target = path.join(REGISTRY_DIR, process.pid + '.json');
+        var temp = target + '.tmp-' + _mcpInstanceId;
+        fs.writeFileSync(temp, JSON.stringify(entry, null, 2), { encoding: 'utf-8', mode: 0o600 });
+        fs.renameSync(temp, target);
+        try { fs.chmodSync(target, 0o600); } catch (_) { /* Windows 等平台可能不支持 POSIX mode */ }
     } catch (e) {
         console.warn('[cc-mcp] writeRegistry failed:', e.message || e);
     }
@@ -405,25 +422,25 @@ function removeRegistry() {
     } catch (e) { /* ignore */ }
 }
 
-/** 分配可用端口：先试 DEFAULT，如果被占用递增 */
-function findFreePort(startPort) {
-    var net = require('net');
-    return new Promise(function (resolve) {
-        function tryPort(p) {
-            var tester = net.createServer()
-                .once('error', function () { tryPort(p + 1); })
-                .once('listening', function () {
-                    tester.close(function () { resolve(p); });
-                })
-                .listen(p, '127.0.0.1');
-        }
-        tryPort(startPort);
+function startMcpServer() {
+    if (_mcpServer && _mcpServer.started) return Promise.resolve(_mcpServer);
+    if (_mcpStartPromise) return _mcpStartPromise;
+
+    var pending = startMcpServerOnce();
+    _mcpStartPromise = pending;
+    pending.then(function () {
+        if (_mcpStartPromise === pending) _mcpStartPromise = null;
+    }, function () {
+        if (_mcpStartPromise === pending) _mcpStartPromise = null;
     });
+    return pending;
 }
 
-async function startMcpServer() {
-    if (_mcpServer && _mcpServer.started) return;
-    var port = await findFreePort(MCP_DEFAULT_PORT);
+async function startMcpServerOnce() {
+    // 每次真实 server 生命周期都换身份与凭据；面板 restart 不能沿用旧 token/generation。
+    _mcpInstanceId = crypto.randomBytes(16).toString('hex');
+    _mcpGeneration = Math.max(Date.now(), _mcpGeneration + 1);
+    _mcpAuthToken = crypto.randomBytes(32).toString('hex');
     var sdk = require(SDK_PATH);
 
     // ── 使用 mcp-sdk ──────────────────────────────────────────────
@@ -448,7 +465,11 @@ async function startMcpServer() {
     var server = sdk.createServer({
         name: 'cocos-mcp',
         version: EXTENSION_VERSION,
-        port: port,
+        port: 0,
+        host: '127.0.0.1',
+        authToken: _mcpAuthToken,
+        allowedOrigins: [],
+        maxBodyBytes: MCP_MAX_BODY_BYTES,
         tools: toolDefs.map(function (t) {
             return {
                 name: t.name,
@@ -469,7 +490,9 @@ async function startMcpServer() {
     });
 
     // 启动 HTTP（cocos-mcp 只跑 HTTP，不跑 stdio）
-    await server.start('http');
+    var address = await server.start('http');
+    if (!address || !address.port) throw new Error('MCP HTTP transport did not return a bound port');
+    var port = address.port;
     _mcpServer = {
         started: true,
         host: '127.0.0.1',
@@ -477,10 +500,11 @@ async function startMcpServer() {
         toolCount: toolDefs.length,
         resourceCount: resourceDefs.length,
         stats: stats,
-        stop: function () { server.stop(); },
+        stop: function () { return server.stop(); },
     };
     writeRegistry();
     log('MCP server up (SDK) — http://127.0.0.1:' + port + '/mcp  (tools:' + toolDefs.length + ') shortName=' + getProjectShortName());
+    return _mcpServer;
 }
 
 /**
@@ -511,11 +535,13 @@ function buildToolCtx() {
 }
 
 async function stopMcpServer() {
+    // unload 若撞上尚未完成的 listen，必须先等启动收口再关闭，否则会在扩展卸载后遗留 server。
+    if (_mcpStartPromise) {
+        try { await _mcpStartPromise; } catch (e) { /* 启动失败时没有 server 可关 */ }
+    }
     if (!_mcpServer) return;
     removeRegistry();
     if (_mcpServer.stop) {
-        _mcpServer.stop();
-    } else {
         try { await _mcpServer.stop(); } catch (e) { /* ignore */ }
     }
     _mcpServer = null;

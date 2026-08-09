@@ -12,6 +12,7 @@
 
 const { parsePrefab } = require('../parse.js');
 const { writePrefab } = require('../write.js');
+const { acquireFileLock, hashContent, releaseFileLock } = require('../transaction.js');
 const { computeDiff } = require('./diff.js');
 
 // 各 op handler
@@ -96,6 +97,7 @@ const OP_HANDLERS = {
  * @param {object}   [options]
  * @param {string}   [options.projectRoot]  项目根目录（含 assets/），默认从 filePath 向上推断。
  * @param {boolean}  [options.dryRun]       true 时不写盘，仅返回模拟结果（含 diff）。
+ * @param {string}   [options.expectedHash]  调用方读取到的 SHA-256 revision；不匹配时拒绝覆盖。
  * @returns {{ changed: boolean, opsApplied: number, nodesAffected: (string|number)[], dryRun?: boolean, diff?: object[] }}
  *
  * @throws 任一 op 失败时抛错，不落盘
@@ -112,15 +114,35 @@ function editPrefab(filePath, ops, options) {
   validateOps(ops, Object.keys(OP_HANDLERS));
 
   const opts = options || {};
+  if (opts.expectedHash !== undefined &&
+      (typeof opts.expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(opts.expectedHash))) {
+    throw new Error('editPrefab: expectedHash 必须是 64 位小写 SHA-256');
+  }
+  const dryRun = !!opts.dryRun;
+  const lockPath = dryRun ? null : acquireFileLock(filePath);
+  try {
+    return editPrefabLocked(filePath, ops, opts, dryRun);
+  } finally {
+    releaseFileLock(lockPath);
+  }
+}
 
+function editPrefabLocked(filePath, ops, opts, dryRun) {
   const prefabData = parsePrefab(filePath, { rootType: opts.rootType });
   prefabData.resolverStartPath = opts.projectRoot || filePath;
 
-  const dryRun = !!opts.dryRun;
   prefabData.dryRun = dryRun;
   prefabData.rollbackActions = [];
   prefabData.plannedExternalChanges = [];
   prefabData.externalChanged = false;
+  const beforeHash = hashContent(prefabData.raw);
+  if (opts.expectedHash && opts.expectedHash !== beforeHash) {
+    const conflict = new Error(
+      `prefab revision conflict before edit: expected ${opts.expectedHash}, actual ${beforeHash}`
+    );
+    conflict.code = 'E_REVISION_CONFLICT';
+    throw conflict;
+  }
   const beforeElementsJson = JSON.stringify(prefabData.elements);
   const beforeSnapshot = dryRun
     ? JSON.parse(JSON.stringify(prefabData.elements))
@@ -131,6 +153,7 @@ function editPrefab(filePath, ops, options) {
 
   let opsApplied = 0;
   let prefabChanged = false;
+  let writeResult = null;
   try {
     for (const op of ops) {
       if (!op || typeof op.op !== 'string') {
@@ -154,7 +177,9 @@ function editPrefab(filePath, ops, options) {
 
     prefabChanged = JSON.stringify(prefabData.elements) !== beforeElementsJson;
     if (!dryRun && prefabChanged) {
-      writePrefab(filePath, prefabData.elements, prefabData.raw);
+      writeResult = writePrefab(filePath, prefabData.elements, prefabData.raw, {
+        expectedHash: opts.expectedHash,
+      });
     }
   } catch (error) {
     // 与 prefab 的延迟落盘保持同样的 batch 原子性：逆序回滚
@@ -178,6 +203,8 @@ function editPrefab(filePath, ops, options) {
     changed: !dryRun && (prefabChanged || prefabData.externalChanged),
     opsApplied,
     nodesAffected: affectedNames,
+    beforeHash,
+    afterHash: writeResult ? writeResult.afterHash : beforeHash,
   };
 
   if (dryRun) {

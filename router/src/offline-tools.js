@@ -50,9 +50,11 @@ var OFFLINE_TOOLS = [
         name: 'prefab_query',
         description: '[offline] 不需要 Cocos 编辑器运行。查询 prefab 文件节点树或单节点详情。\n' +
             'selector.type 可选：\n' +
-            '  tree（默认）→ 精简节点树\n' +
-            '  node → { name } 按名称查单节点详情\n' +
-            '  find → { nodeType } 返回所有匹配 __type__ 的元素 id 列表',
+            '  tree（默认）→ 精简节点树；withComps=true 展开组件字段\n' +
+            '  node → { name, withComps? } 按名称查单节点详情\n' +
+            '  find → { nodeType } 返回所有匹配 __type__ 的元素 id 列表\n' +
+            '  field → { name, componentType, field } 查询单字段\n' +
+            '  overrides → { node } 查询嵌套 prefab override',
         inputSchema: {
             type: 'object',
             properties: {
@@ -64,9 +66,28 @@ var OFFLINE_TOOLS = [
                     type: 'object',
                     description: '查询选择器，不传时默认 type="tree"',
                     properties: {
-                        type: { type: 'string', enum: ['tree', 'node', 'find'] },
-                        name: { type: 'string', description: 'selector.type="node" 时必填' },
+                        type: { type: 'string', enum: ['tree', 'node', 'find', 'field', 'overrides'] },
+                        name: { type: 'string', description: 'selector.type="node" 或 "field" 时必填' },
                         nodeType: { type: 'string', description: 'selector.type="find" 时必填，如 "cc.Label"' },
+                        withComps: { type: 'boolean', description: 'tree/node 可选：展开组件字段' },
+                        componentType: { type: 'string', description: 'selector.type="field" 时必填，如 "cc.Label"' },
+                        field: { type: 'string', description: 'selector.type="field" 时必填，如 "_string"' },
+                        node: {
+                            description: 'selector.type="overrides" 时必填：节点名、{id:N} 或 {path:"A/B"}',
+                            oneOf: [
+                                { type: 'string' },
+                                {
+                                    type: 'object',
+                                    properties: { id: { type: 'integer', minimum: 0 } },
+                                    required: ['id'],
+                                },
+                                {
+                                    type: 'object',
+                                    properties: { path: { type: 'string', minLength: 1 } },
+                                    required: ['path'],
+                                },
+                            ],
+                        },
                     },
                 },
             },

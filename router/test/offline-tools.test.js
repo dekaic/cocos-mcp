@@ -30,6 +30,7 @@ const {
     requireAbsolutePath,
     OFFLINE_TOOLS,
 } = require('../src/offline-tools.js');
+const { fixturePath: FULL_FIXTURE } = require('../../cli/test/fixture-project.js');
 
 const TMP_FILES = [];
 var nextTmpId = 0;
@@ -92,6 +93,16 @@ test('每个 offline tool description 包含 "[offline]" 标注', () => {
     }
 });
 
+test('prefab_query schema exposes every selector already supported by the CLI', () => {
+    var tool = OFFLINE_TOOLS.find(function (item) { return item.name === 'prefab_query'; });
+    var selector = tool.inputSchema.properties.selector;
+    assert.deepEqual(selector.properties.type.enum, ['tree', 'node', 'find', 'field', 'overrides']);
+    assert.equal(selector.properties.withComps.type, 'boolean');
+    assert.equal(selector.properties.componentType.type, 'string');
+    assert.equal(selector.properties.field.type, 'string');
+    assert.ok(Array.isArray(selector.properties.node.oneOf));
+});
+
 // ── requireAbsolutePath ────────────────────────────────────────
 
 test('requireAbsolutePath 相对路径抛错', () => {
@@ -145,6 +156,32 @@ test('prefab_query type=find 返回 cc.Label id 列表', async () => {
     assert.ok(Array.isArray(ids), 'find 结果应是数组');
     assert.ok(ids.length > 0, '应找到至少一个 cc.Label');
     ids.forEach(function (id) { assert.equal(typeof id, 'number'); });
+});
+
+test('prefab_query forwards withComps and field selectors declared by its schema', async () => {
+    var treeResult = await handleOfflineToolCall('prefab_query', {
+        filePath: FULL_FIXTURE,
+        selector: { type: 'tree', withComps: true },
+    });
+    var tree = JSON.parse(treeResult.content[0].text);
+    var labelNode = tree.children.find(function (item) { return item.name === 'n7'; });
+    assert.equal(labelNode.components[0].type, 'cc.Label');
+
+    var fieldResult = await handleOfflineToolCall('prefab_query', {
+        filePath: FULL_FIXTURE,
+        selector: { type: 'field', name: 'n7', componentType: 'cc.Label', field: '_string' },
+    });
+    assert.equal(JSON.parse(fieldResult.content[0].text), 'Start');
+});
+
+test('prefab_query forwards overrides selectors declared by its schema', async () => {
+    var result = await handleOfflineToolCall('prefab_query', {
+        filePath: FULL_FIXTURE,
+        selector: { type: 'overrides', node: { id: 10 } },
+    });
+    var data = JSON.parse(result.content[0].text);
+    assert.equal(data.stubNodeId, 10);
+    assert.ok(data.propertyOverrides.length > 0);
 });
 
 // ── prefab_query 相对路径报错 ────────────────────────────────────

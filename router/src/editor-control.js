@@ -496,7 +496,7 @@ function probeReady(url) {
 /**
  * 项目就绪探测：MCP initialize 成功 ≠ 进了项目 —— 实测激进清登录态后 initialize 仍 ready，
  * 但编辑器 UI 卡在登录页。用 asset_query_assets 查 db://assets/* 探 asset-db 是否就绪：
- * 项目真打开才加载 asset-db、返回非空顶层资源；登录页 / 项目加载中则空或失败。
+ * 项目真打开才加载 asset-db、返回合法 assets 响应（数组可为空）；登录页 / 项目加载中则调用失败。
  * 正向（进项目非空）已实测；负向（登录页态返回啥）按逻辑推断，未在登录页态实测。
  */
 function probeProjectReady(url) {
@@ -528,6 +528,7 @@ function hasReadyAssetText(txt) {
     try {
         var parsed = JSON.parse(txt);
         if (Array.isArray(parsed)) return parsed.length > 0;
+        if (parsed && Array.isArray(parsed.assets)) return true;
         if (parsed && Array.isArray(parsed.content)) return parsed.content.length > 0;
     } catch (e) {
         return false;
@@ -539,7 +540,8 @@ function hasReadyAssetText(txt) {
  * 轮询等指定项目的编辑器就绪。
  *   就绪判定：注册表有 projectPath 匹配、非 stale、pid≠excludePid 的 entry，且 probeReady 成功。
  *   excludePid：restart 时传被 kill 的旧 pid，避免匹配到尚未删净的旧注册。
- * 返回 { ready, entry?, reason?, waitedMs }。
+ * ready 保持兼容，表示达到调用要求的最高层；各分层字段说明实际探测到了哪一步。
+ * importer/runtime 健康不能由通用 AssetDB 查询推断，因此明确返回 runtimeHealth=not_checked。
  */
 async function waitReady(projectPath, opts) {
     opts = opts || {};
@@ -548,7 +550,10 @@ async function waitReady(projectPath, opts) {
     var requireProject = opts.requireProject !== false;   // 默认要求项目就绪（区分登录页/加载中），传 false 退回只看 MCP
     var start = Date.now();
     var lastReason = 'still waiting';
+    var sawProcess = false;
+    var sawRegistry = false;
     var sawMcp = false;
+    var sawAssetDb = false;
 
     while (Date.now() - start < timeoutMs) {
         var hit = activeEditors().filter(function (e) {
@@ -556,17 +561,32 @@ async function waitReady(projectPath, opts) {
         })[0];
 
         if (hit) {
+            sawProcess = true;
+            sawRegistry = true;
             var mcpOk = await probeReady(hit.url);
             if (mcpOk) {
                 sawMcp = true;
-                var projOk = requireProject ? await probeProjectReady(hit.url) : true;
-                if (projOk) {
+                var assetDbOk = requireProject ? await probeProjectReady(hit.url) : false;
+                if (assetDbOk) sawAssetDb = true;
+                if (!requireProject || assetDbOk) {
                     return {
-                        ready: true, mcpReady: true, projectReady: projOk,
+                        ready: true,
+                        processReady: true,
+                        registryReady: true,
+                        mcpReady: true,
+                        assetDbReady: requireProject ? assetDbOk : null,
+                        projectReady: requireProject ? assetDbOk : true,
+                        runtimeHealth: 'not_checked',
                         entry: {
                             shortName: sanitize(hit.projectShortName),
                             pid: hit.pid, url: hit.url, port: hit.port,
                             projectPath: hit.projectPath, editorVersion: hit.editorVersion,
+                            sourceRealPath: hit.sourceRealPath,
+                            sourceGitHead: hit.sourceGitHead,
+                            sourceDirty: hit.sourceDirty,
+                            runtimeBuildId: hit.runtimeBuildId,
+                            toolSchemaHash: hit.toolSchemaHash,
+                            loadedAt: hit.loadedAt,
                         },
                         waitedMs: Date.now() - start,
                     };
@@ -576,11 +596,27 @@ async function waitReady(projectPath, opts) {
                 lastReason = 'registered (pid=' + hit.pid + ') but MCP server not responding yet';
             }
         } else {
-            lastReason = 'no fresh registry entry for project yet (editor still booting)';
+            var processPid = findEditorProcessByProject(projectPath);
+            if (processPid && processPid !== excludePid) {
+                sawProcess = true;
+                lastReason = 'editor process exists (pid=' + processPid + ') but no fresh registry entry yet';
+            } else {
+                lastReason = 'no editor process or fresh registry entry for project yet';
+            }
         }
         await sleep(1000);
     }
-    var res = { ready: false, mcpReady: sawMcp, projectReady: false, reason: lastReason, waitedMs: Date.now() - start };
+    var res = {
+        ready: false,
+        processReady: sawProcess,
+        registryReady: sawRegistry,
+        mcpReady: sawMcp,
+        assetDbReady: sawAssetDb,
+        projectReady: false,
+        runtimeHealth: 'not_checked',
+        reason: lastReason,
+        waitedMs: Date.now() - start,
+    };
     if (sawMcp) {
         res.hint = '⚠️ MCP server 起来了但项目没就绪。若是 router 拉起/重启编辑器，请确认 spawnArgs 包含 --nologin；若是手动拉起，可能卡在 Cocos Developer Login 或仍在加载项目。';
     }
@@ -619,7 +655,8 @@ var EDITOR_TOOLS = [
     },
     {
         name: 'editor_wait_ready',
-        description: '[editor] 等指定项目的 Cocos 编辑器就绪（注册文件出现且 MCP server 能 initialize）。' +
+        description: '[editor] 等指定项目的 Cocos 编辑器就绪，并分层返回 process / registry / MCP / AssetDB 状态。' +
+            'importer/runtime 健康不会由 AssetDB API 响应推断，runtimeHealth 明确返回 not_checked。' +
             '用于「拉起编辑器后等它起来再操作」。已就绪则立即返回。' +
             '编辑器尚未运行时必须传 projectPath（空注册表无法从 shortName 反推路径）。',
         inputSchema: {
@@ -768,6 +805,12 @@ async function handleEditorToolCall(name, args) {
                     entry: {
                         shortName: sanitize(spRunning.projectShortName), pid: spRunning.pid,
                         url: spRunning.url, port: spRunning.port, projectPath: spRunning.projectPath,
+                        sourceRealPath: spRunning.sourceRealPath,
+                        sourceGitHead: spRunning.sourceGitHead,
+                        sourceDirty: spRunning.sourceDirty,
+                        runtimeBuildId: spRunning.runtimeBuildId,
+                        toolSchemaHash: spRunning.toolSchemaHash,
+                        loadedAt: spRunning.loadedAt,
                     },
                 });
             }

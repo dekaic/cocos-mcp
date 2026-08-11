@@ -158,6 +158,12 @@ async function discover() {
             pid: info.pid,
             startedAt: Date.parse(info.startedAt) || 0,   // 同项目双实例时 dedupe 按它选代表
             url: info.url,
+            sourceRealPath: info.sourceRealPath,
+            sourceGitHead: info.sourceGitHead,
+            sourceDirty: info.sourceDirty,
+            runtimeBuildId: info.runtimeBuildId,
+            toolSchemaHash: info.toolSchemaHash,
+            loadedAt: info.loadedAt,
             tools: tools,
             resources: resources,
             lastProbed: Date.now(),
@@ -401,7 +407,19 @@ async function handleToolCall(name, args) {
     if (name === 'router_list_editors') {
         await discover();
         var list = Array.from(editors.values()).map(function (ed) {
-            return { shortName: ed.shortName, pid: ed.pid, url: ed.url, projectPath: ed.projectPath, toolCount: ed.tools.length };
+            return {
+                shortName: ed.shortName,
+                pid: ed.pid,
+                url: ed.url,
+                projectPath: ed.projectPath,
+                toolCount: ed.tools.length,
+                sourceRealPath: ed.sourceRealPath,
+                sourceGitHead: ed.sourceGitHead,
+                sourceDirty: ed.sourceDirty,
+                runtimeBuildId: ed.runtimeBuildId,
+                toolSchemaHash: ed.toolSchemaHash,
+                loadedAt: ed.loadedAt,
+            };
         });
         return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] };
     }

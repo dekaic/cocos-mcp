@@ -63,6 +63,26 @@ test('hasReadyAssetResult accepts text JSON content', () => {
     assert.equal(result, true);
 });
 
+test('hasReadyAssetResult accepts text JSON assets wrapper, including empty assets', () => {
+    var withAsset = hasReadyAssetResult({
+        result: {
+            content: [
+                { type: 'text', text: '{"assets":[{"name":"assets"}]}' },
+            ],
+        },
+    });
+    var withoutAssets = hasReadyAssetResult({
+        result: {
+            content: [
+                { type: 'text', text: '{"assets":[]}' },
+            ],
+        },
+    });
+
+    assert.equal(withAsset, true);
+    assert.equal(withoutAssets, true);
+});
+
 test('hasReadyAssetResult rejects empty or error results', () => {
     assert.equal(hasReadyAssetResult({ result: { content: [] } }), false);
     assert.equal(hasReadyAssetResult({ error: { message: 'not ready' } }), false);
@@ -72,6 +92,8 @@ test('hasReadyAssetResult rejects empty or error results', () => {
 // ── 跨进程 spawn 锁 ─────────────────────────────────────────────
 
 const fs = require('node:fs');
+const childProcess = require('node:child_process');
+const http = require('node:http');
 const {
     spawnLockPath,
     acquireSpawnLock,
@@ -191,4 +213,78 @@ test('assertNoDebugSession throws on active connections unless forced', async ()
 test('assertNoDebugSession passes when no connections', () => {
     // 没人监听的项目路径 → previewPort 回落 7456，但 pid 用本进程（没连 7456）→ 0 连接
     assert.doesNotThrow(() => assertNoDebugSession('editor_kill', { pid: process.pid, projectPath: '/no/such/project' }, false));
+});
+
+test('waitReady reports readiness layers and runtime identity from registry', async () => {
+    const home = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'cc-mcp-ready-'));
+    const projectPath = pathMod.join(home, 'fixture-project');
+    const registryDir = pathMod.join(home, '.cocos-mcp', 'editors');
+    fs.mkdirSync(projectPath);
+    fs.mkdirSync(registryDir, { recursive: true });
+
+    const server = http.createServer((req, res) => {
+        const chunks = [];
+        req.on('data', (chunk) => chunks.push(chunk));
+        req.on('end', () => {
+            const request = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+            const result = request.method === 'tools/call'
+                ? { content: [{ type: 'text', text: '{"assets":[]}' }] }
+                : {};
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }));
+        });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    const port = server.address().port;
+    fs.writeFileSync(pathMod.join(registryDir, process.pid + '.json'), JSON.stringify({
+        pid: process.pid,
+        projectPath,
+        projectShortName: 'fixture-project',
+        host: '127.0.0.1',
+        port,
+        url: 'http://127.0.0.1:' + port + '/mcp',
+        editorVersion: '3.8.8',
+        sourceRealPath: '/source/cocos-mcp',
+        sourceGitHead: 'abc123',
+        sourceDirty: true,
+        runtimeBuildId: 'runtime-hash',
+        toolSchemaHash: 'schema-hash',
+        loadedAt: '2026-08-11T00:00:00.000Z',
+        updatedAt: new Date().toISOString(),
+    }));
+
+    const modulePath = pathMod.resolve(__dirname, '../src/editor-control.js');
+    const script = [
+        'const control = require(' + JSON.stringify(modulePath) + ');',
+        'control.waitReady(' + JSON.stringify(projectPath) + ', { timeoutMs: 3000 })',
+        '  .then((result) => process.stdout.write(JSON.stringify(result)))',
+        '  .catch((error) => { console.error(error); process.exitCode = 1; });',
+    ].join('\n');
+
+    try {
+        const stdout = await new Promise((resolve, reject) => {
+            childProcess.execFile(process.execPath, ['-e', script], {
+                env: Object.assign({}, process.env, { HOME: home }),
+            }, (error, output, stderr) => {
+                if (error) reject(Object.assign(error, { stderr }));
+                else resolve(output);
+            });
+        });
+        const result = JSON.parse(stdout);
+        assert.equal(result.ready, true);
+        assert.equal(result.processReady, true);
+        assert.equal(result.registryReady, true);
+        assert.equal(result.mcpReady, true);
+        assert.equal(result.assetDbReady, true);
+        assert.equal(result.projectReady, true);
+        assert.equal(result.runtimeHealth, 'not_checked');
+        assert.equal(result.entry.sourceRealPath, '/source/cocos-mcp');
+        assert.equal(result.entry.runtimeBuildId, 'runtime-hash');
+        assert.equal(result.entry.toolSchemaHash, 'schema-hash');
+        assert.equal(result.entry.loadedAt, '2026-08-11T00:00:00.000Z');
+    } finally {
+        await new Promise((resolve) => server.close(resolve));
+        fs.rmSync(home, { recursive: true, force: true });
+    }
 });

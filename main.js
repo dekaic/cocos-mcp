@@ -3,6 +3,9 @@
 var fs = require('fs');
 var path = require('path');
 var { exec } = require('child_process');
+var runtimeIdentity = require('./server/runtime-identity');
+
+var _runtimeIdentity = runtimeIdentity.createRuntimeIdentity(__dirname);
 
 var DEV_DIR = '.dev';
 
@@ -322,6 +325,7 @@ exports.methods = {
             },
             gitBranch: gitBranch,
             gitHead: gitHead,
+            extensionRuntime: Object.assign({}, _runtimeIdentity),
             commandLog: _commandLog.slice().reverse(),
             mcpServer: _mcpServer ? {
                 running: _mcpServer.started,
@@ -390,6 +394,12 @@ function writeRegistry() {
             execPath: getEditorExecPath(),
             startedAt: _mcpServer.stats.startedAt,
             updatedAt: new Date().toISOString(),
+            sourceRealPath: _runtimeIdentity.sourceRealPath,
+            sourceGitHead: _runtimeIdentity.sourceGitHead,
+            sourceDirty: _runtimeIdentity.sourceDirty,
+            runtimeBuildId: _runtimeIdentity.runtimeBuildId,
+            toolSchemaHash: _runtimeIdentity.toolSchemaHash,
+            loadedAt: _runtimeIdentity.loadedAt,
         };
         fs.writeFileSync(path.join(REGISTRY_DIR, process.pid + '.json'), JSON.stringify(entry, null, 2), 'utf-8');
     } catch (e) {
@@ -404,25 +414,8 @@ function removeRegistry() {
     } catch (e) { /* ignore */ }
 }
 
-/** 分配可用端口：先试 DEFAULT，如果被占用递增 */
-function findFreePort(startPort) {
-    var net = require('net');
-    return new Promise(function (resolve) {
-        function tryPort(p) {
-            var tester = net.createServer()
-                .once('error', function () { tryPort(p + 1); })
-                .once('listening', function () {
-                    tester.close(function () { resolve(p); });
-                })
-                .listen(p, '127.0.0.1');
-        }
-        tryPort(startPort);
-    });
-}
-
 async function startMcpServer() {
     if (_mcpServer && _mcpServer.started) return;
-    var port = await findFreePort(MCP_DEFAULT_PORT);
     var sdk = require(SDK_PATH);
 
     // ── 使用 mcp-sdk ──────────────────────────────────────────────
@@ -430,6 +423,7 @@ async function startMcpServer() {
     var ctx = buildToolCtx();
     var toolDefs = tdef.defineTools(ctx);
     var resourceDefs = tdef.defineResources(ctx);
+    _runtimeIdentity.toolSchemaHash = runtimeIdentity.hashToolSchemas(toolDefs);
 
     // 只计真实的工具调用 / 资源读取，不计 router 每 15s 的 initialize/tools-list 探活——
     // 否则计数永远在涨，无法用于判断「业务指令到没到编辑器」。
@@ -447,7 +441,7 @@ async function startMcpServer() {
     var server = sdk.createServer({
         name: 'cocos-mcp',
         version: '1.0.0',
-        port: port,
+        port: MCP_DEFAULT_PORT,
         tools: toolDefs.map(function (t) {
             return {
                 name: t.name,
@@ -468,7 +462,8 @@ async function startMcpServer() {
     });
 
     // 启动 HTTP（cocos-mcp 只跑 HTTP，不跑 stdio）
-    await server.start('http');
+    var started = await server.start('http');
+    var port = started.port;
     _mcpServer = {
         started: true,
         host: '127.0.0.1',
@@ -476,7 +471,7 @@ async function startMcpServer() {
         toolCount: toolDefs.length,
         resourceCount: resourceDefs.length,
         stats: stats,
-        stop: function () { server.stop(); },
+        stop: function () { return server.stop(); },
     };
     writeRegistry();
     log('MCP server up (SDK) — http://127.0.0.1:' + port + '/mcp  (tools:' + toolDefs.length + ') shortName=' + getProjectShortName());
@@ -513,8 +508,6 @@ async function stopMcpServer() {
     if (!_mcpServer) return;
     removeRegistry();
     if (_mcpServer.stop) {
-        _mcpServer.stop();
-    } else {
         try { await _mcpServer.stop(); } catch (e) { /* ignore */ }
     }
     _mcpServer = null;

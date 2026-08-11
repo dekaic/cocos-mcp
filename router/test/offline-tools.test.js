@@ -103,6 +103,13 @@ test('prefab_query schema exposes every selector already supported by the CLI', 
     assert.ok(Array.isArray(selector.properties.node.oneOf));
 });
 
+test('prefab_edit schema only requires op because not every op uses node', () => {
+    var tool = OFFLINE_TOOLS.find(function (item) { return item.name === 'prefab_edit'; });
+    assert.deepEqual(tool.inputSchema.properties.ops.items.required, ['op']);
+    assert.match(tool.description, /set-nested-node-field/);
+    assert.match(tool.description, /add-nested-prefab/);
+});
+
 // ── requireAbsolutePath ────────────────────────────────────────
 
 test('requireAbsolutePath 相对路径抛错', () => {

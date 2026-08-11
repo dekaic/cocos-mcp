@@ -237,17 +237,21 @@ function getNestedNodeFileId(hostPrefabPath, elements, stubNodeId, nodeName) {
 // ─── 在 stub 节点的 PrefabInstance.propertyOverrides 写入字段 ─
 
 /**
- * 在 stub 节点的 PrefabInstance.propertyOverrides 中写入一条组件属性 override。
- * TargetInfo.localID 使用 compFileId（嵌套 prefab 内该组件的 CompPrefabInfo.fileId）。
+ * 在 stub 节点的 PrefabInstance.propertyOverrides 中写入一条属性 override。
+ * TargetInfo.localID 可以定位嵌套 prefab 内的节点或组件，也支持多层 nested 链。
  *
  * @param {object}   prefabData    parsePrefab 返回值
  * @param {number}   stubNodeId    stub 节点 __id__
- * @param {string}   compFileId    嵌套 prefab 内目标组件的 CompPrefabInfo.fileId
- * @param {string[]} propertyPath  属性路径，如 ['_string']
+ * @param {string[]} localIdChain  嵌套目标的 fileId 链
+ * @param {string[]} propertyPath  属性路径，如 ['_string'] / ['_lpos']
  * @param {*}        value         要写入的值
  */
-function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, value) {
+function setStubPropertyOverride(prefabData, stubNodeId, localIdChain, propertyPath, value) {
   const { elements } = prefabData;
+
+  if (!Array.isArray(localIdChain) || localIdChain.length === 0) {
+    throw new Error(`setStubPropertyOverride: localIdChain 必须是非空数组`);
+  }
 
   const stubNode = elements[stubNodeId];
   const prefabInfo = elements[stubNode._prefab.__id__];
@@ -267,7 +271,8 @@ function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, v
       if (!tiRef || typeof tiRef.__id__ !== 'number') continue;
       const ti = elements[tiRef.__id__];
       if (!ti || ti.__type__ !== 'cc.TargetInfo') continue;
-      if (!Array.isArray(ti.localID) || ti.localID[0] !== compFileId) continue;
+      if (!Array.isArray(ti.localID) || ti.localID.length !== localIdChain.length) continue;
+      if (!ti.localID.every((v, i) => v === localIdChain[i])) continue;
 
       if (
         Array.isArray(info.propertyPath) &&
@@ -282,7 +287,7 @@ function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, v
 
   const targetInfo = {
     __type__: 'cc.TargetInfo',
-    localID: [compFileId],
+    localID: localIdChain.slice(),
   };
   const targetInfoId = elements.length;
   elements.push(targetInfo);
@@ -300,6 +305,11 @@ function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, v
     prefabInstance.propertyOverrides = [];
   }
   prefabInstance.propertyOverrides.push({ __id__: overrideInfoId });
+}
+
+/** 兼容既有组件调用：单个 CompPrefabInfo.fileId 包装为 localID 链。 */
+function setStubCompOverride(prefabData, stubNodeId, compFileId, propertyPath, value) {
+  setStubPropertyOverride(prefabData, stubNodeId, [compFileId], propertyPath, value);
 }
 
 // ─── 跨 nested @property 挂载（cc.TargetOverrideInfo）─────────
@@ -527,6 +537,7 @@ function addRootTargetOverride(prefabData, rootId, sourceCompId, propertyPath, t
 module.exports = {
   getNestedCompFileId,
   getNestedNodeFileId,
+  setStubPropertyOverride,
   setStubCompOverride,
   resolveLocalIdChain,
   addRootTargetOverride,

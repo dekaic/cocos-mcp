@@ -34,6 +34,7 @@ const { execAddComponent } = require('./ops/add-component.js');
 const { execRemoveComponent } = require('./ops/remove-component.js');
 const { execSetComponentRef } = require('./ops/set-component-ref.js');
 const { execSetNestedComponentField } = require('./ops/set-nested-component-field.js');
+const { execSetNestedNodeField } = require('./ops/set-nested-node-field.js');
 const { execBulkSet } = require('./ops/bulk-set.js');
 const { execDedupeComponent } = require('./ops/dedupe-component.js');
 const { execSetEditBox } = require('./ops/set-editbox.js');
@@ -71,6 +72,7 @@ const OP_HANDLERS = {
   'remove-component': execRemoveComponent,
   'set-component-ref': execSetComponentRef,
   'set-nested-component-field': execSetNestedComponentField,
+  'set-nested-node-field': execSetNestedNodeField,
   'bulk-set': execBulkSet,
   'dedupe-component': execDedupeComponent,
   'set-editbox': execSetEditBox,

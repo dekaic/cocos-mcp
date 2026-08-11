@@ -51,7 +51,7 @@ function queryNode(prefabData, name, opts) {
       } catch (_) {
         result.overrides = [];
       }
-      result._note = 'stub 节点本身 _components/_children 为空；真实组件和子树在被引用 prefab 内（见 stubAsset），改 stub 内部字段用 set-nested-component-field / set-component-ref refSubNode';
+      result._note = 'stub 节点本身 _components/_children 为空；真实组件和子树在被引用 prefab 内（见 stubAsset），改内部节点字段用 set-nested-node-field，改组件字段用 set-nested-component-field';
     }
     result.componentTypes = componentTypes(elements, el);
     if (withComps) {

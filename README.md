@@ -249,12 +249,11 @@ echo "restart-package" > .dev/refresh
 
 ## 已知限制
 
-1. **stub 节点的组件字段**：`set-label-text` / `set-sprite-frame` / `set-nested-component-field` 已通过 `uuid-resolver.js` 解析 `CompPrefabInfo.fileId` 写入 stub 节点的 override
-2. **多层嵌套 stub**：CLI 已通过 `refSubNode` 字符串数组路径支持。极端深嵌套场景仍建议走 tools pipeline（`tools/step-3-script/bind-prefab-components.ts`）
-3. **offline 改完后需手动触发刷新**：直接写磁盘 Cocos 编辑器不会自动感知。改完后调用 `asset_reimport`（编辑器在线时）或 `preview_refresh_and_reload`，否则编辑器和预览页面看到的仍是旧内容
-4. **分页为兼容性 opt-in**：`asset_query_assets` 省略 `limit` 时仍返回全部匹配项；分页减少 MCP wire payload，但 Cocos AssetDB 仍先产生完整匹配数组
-5. **参数校验范围**：当前统一检查顶层 `required` 字段，不执行完整 JSON Schema 类型、嵌套或条件校验
-6. **扩展 reload 不可同步确认**：reload 会中断当前扩展自己的 MCP endpoint，所以 `local_reload_package` 只报告 scheduled；调用方必须从 router/registry 观察新 `loadedAt`
+1. **多层嵌套组件引用**：CLI 已通过 `refSubNode` 字符串数组路径支持。极端深嵌套场景仍建议走 tools pipeline（`tools/step-3-script/bind-prefab-components.ts`）
+2. **offline 改完后需手动触发刷新**：直接写磁盘 Cocos 编辑器不会自动感知。改完后调用 `asset_reimport`（编辑器在线时）或 `preview_refresh_and_reload`，否则编辑器和预览页面看到的仍是旧内容
+3. **分页为兼容性 opt-in**：`asset_query_assets` 省略 `limit` 时仍返回全部匹配项；分页减少 MCP wire payload，但 Cocos AssetDB 仍先产生完整匹配数组
+4. **参数校验范围**：当前统一检查顶层 `required` 字段，不执行完整 JSON Schema 类型、嵌套或条件校验
+5. **扩展 reload 不可同步确认**：reload 会中断当前扩展自己的 MCP endpoint，所以 `local_reload_package` 只报告 scheduled；调用方必须从 router/registry 观察新 `loadedAt`
 
 ---
 

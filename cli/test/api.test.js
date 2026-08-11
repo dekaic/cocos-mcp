@@ -21,6 +21,7 @@ const { addRootTargetOverride, resolveLocalIdChain } = require('../src/editor/ne
 const { compressUuid } = require('../src/id.js');
 const {
   fixturePath: FIXTURE_PATH,
+  nestedChildFileId: NESTED_CHILD_FILE_ID,
   projectRoot: PROJECT_ROOT,
   taskBtnUuid: TASK_BTN_UUID,
 } = require('./fixture-project.js');
@@ -139,6 +140,72 @@ test('set-position: stub 节点走 override 而非直改字段', () => {
 
   // stub 节点本身的 _lpos 字段不应有 x=99（直接修改无效，这里验证 override 是主路径）
   // 不验证 stub._lpos（stub 无此字段是正常的）
+});
+
+test('set-nested-node-field: 写入嵌套 prefab 子节点字段 override', () => {
+  const tmp = cloneFixture('nested-node-field');
+  tmpFiles.push(tmp);
+  const value = { __type__: 'cc.Vec3', x: 10, y: 20, z: 30 };
+
+  editPrefab(tmp, [
+    {
+      op: 'set-nested-node-field',
+      node: { id: 10 },
+      subNode: 'MovableChild',
+      property: '_lpos',
+      value,
+    },
+  ]);
+
+  const reparsed = parsePrefab(tmp);
+  const stub = reparsed.elements[10];
+  const instance = reparsed.elements[reparsed.elements[stub._prefab.__id__].instance.__id__];
+  const match = instance.propertyOverrides
+    .map((ref) => reparsed.elements[ref.__id__])
+    .find((info) => {
+      if (!info || info.__type__ !== 'CCPropertyOverrideInfo') return false;
+      const target = reparsed.elements[info.targetInfo.__id__];
+      return target && target.localID[0] === NESTED_CHILD_FILE_ID && info.propertyPath[0] === '_lpos';
+    });
+
+  assert.ok(match, '应写入目标子节点 fileId 的 _lpos override');
+  assert.deepEqual(match.value, value);
+});
+
+test('reset-overrides: subNode 清除嵌套 prefab 子节点字段 override', () => {
+  const tmp = cloneFixture('reset-nested-node-field');
+  tmpFiles.push(tmp);
+
+  editPrefab(tmp, [
+    {
+      op: 'set-nested-node-field',
+      node: { id: 10 },
+      subNode: 'MovableChild',
+      property: '_active',
+      value: false,
+    },
+  ]);
+  editPrefab(tmp, [
+    {
+      op: 'reset-overrides',
+      node: { id: 10 },
+      subNode: 'MovableChild',
+      property: '_active',
+    },
+  ]);
+
+  const reparsed = parsePrefab(tmp);
+  const stub = reparsed.elements[10];
+  const instance = reparsed.elements[reparsed.elements[stub._prefab.__id__].instance.__id__];
+  const remains = instance.propertyOverrides.some((ref) => {
+    const info = reparsed.elements[ref.__id__];
+    if (!info || info.__type__ !== 'CCPropertyOverrideInfo') return false;
+    const target = reparsed.elements[info.targetInfo.__id__];
+    return target && target.localID[0] === NESTED_CHILD_FILE_ID && info.propertyPath[0] === '_active';
+  });
+
+  assert.equal(remains, false, '目标子节点字段 override 应被移除');
+  assert.equal(instance.propertyOverrides.length, 3, '既有 stub override 应保留');
 });
 
 // ─── set-label-text ───────────────────────────────────────────

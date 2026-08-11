@@ -22,6 +22,7 @@ const nestedPath = path.join(assetsDir, 'NestedEntry.prefab');
 
 const NESTED_UUID = '11111111-2222-4333-8444-555555555555';
 const NESTED_ROOT_FILE_ID = 'nestedRootFileId0001';
+const NESTED_CHILD_FILE_ID = 'nestedChildFileId001';
 const TASK_BTN_UUID = '5f4d2de3-a7dc-4d47-a41f-f27a12549b20';
 
 function writeJson(filePath, value) {
@@ -119,8 +120,10 @@ function buildHomeUiFixture() {
 function buildNestedFixture() {
   return [
     makePrefabRoot({ name: 'NestedEntry', rootId: 1 }),
-    makeNode({ name: 'NestedEntry', prefabId: 2 }),
+    makeNode({ name: 'NestedEntry', childIds: [2], prefabId: 3 }),
+    makeNode({ name: 'MovableChild', parentId: 1, pos: [1, 2, 3], prefabId: 4 }),
     makePrefabInfo({ rootId: 1, fileId: NESTED_ROOT_FILE_ID }),
+    makePrefabInfo({ rootId: 1, fileId: NESTED_CHILD_FILE_ID }),
   ];
 }
 
@@ -142,6 +145,7 @@ process.once('exit', function () {
 
 module.exports = {
   fixturePath,
+  nestedChildFileId: NESTED_CHILD_FILE_ID,
   projectRoot,
   taskBtnUuid: TASK_BTN_UUID,
 };

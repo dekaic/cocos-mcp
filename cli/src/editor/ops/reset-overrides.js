@@ -9,6 +9,8 @@
 //      常见字段 _lpos / _name / _active / _lscale 等
 //   3) property + componentType：清嵌套内某组件字段 override
 //      subNode 用于嵌套 prefab 内同类型组件消歧（同 set-nested-component-field）
+//   4) property + subNode（无 componentType）：清嵌套内某节点字段 override
+//      subNode 与 set-nested-node-field 的定位规则一致
 //
 // 移除的 CCPropertyOverrideInfo / TargetInfo 作为 orphan 留在 elements，
 // 保持其他 __id__ 稳定（与 remove-node / remove-component 同策略）。
@@ -18,7 +20,7 @@
 'use strict';
 
 const { isStub, resolveNode, normalizeComponentType } = require('../helpers.js');
-const { getNestedCompFileId, getNestedNodeFileId } = require('../nested.js');
+const { getNestedCompFileId, getNestedNodeFileId, resolveLocalIdChain } = require('../nested.js');
 
 function execResetOverrides(prefabData, op) {
   const { elements } = prefabData;
@@ -65,20 +67,21 @@ function execResetOverrides(prefabData, op) {
   }
   const propertyPath = Array.isArray(property) ? property : [property];
 
-  // 决定要匹配的 localID[0]
+  // 决定要匹配的完整 localID 链
   // 节点字段 override（无 componentType）：嵌套 prefab 内根节点 fileId 是 Cocos 运行时
   // 实际识别的 key（见 overrides.js 地雷 3）。
-  let targetFileId;
+  let targetLocalId;
   if (rawComponentType) {
     const componentType = normalizeComponentType(rawComponentType, prefabData.resolverStartPath);
-    targetFileId = getNestedCompFileId(prefabData.resolverStartPath, elements, nodeId, componentType, subNode);
+    targetLocalId = [getNestedCompFileId(
+      prefabData.resolverStartPath, elements, nodeId, componentType, subNode
+    )];
+  } else if (subNode !== null && subNode !== undefined) {
+    targetLocalId = resolveLocalIdChain(
+      prefabData.resolverStartPath, elements, nodeId, 'cc.Node', subNode
+    );
   } else {
-    if (subNode !== null && subNode !== undefined) {
-      throw new Error(
-        `editPrefab [reset-overrides]: subNode 必须与 componentType 一起用（节点字段 override 无嵌套子节点定位）`
-      );
-    }
-    targetFileId = getNestedNodeFileId(prefabData.resolverStartPath, elements, nodeId, null);
+    targetLocalId = [getNestedNodeFileId(prefabData.resolverStartPath, elements, nodeId, null)];
   }
 
   if (!Array.isArray(prefabInstance.propertyOverrides) || prefabInstance.propertyOverrides.length === 0) {
@@ -99,7 +102,12 @@ function execResetOverrides(prefabData, op) {
     }
     const tiRef = info.targetInfo;
     const ti = tiRef && typeof tiRef.__id__ === 'number' ? elements[tiRef.__id__] : null;
-    if (!ti || !Array.isArray(ti.localID) || ti.localID[0] !== targetFileId) {
+    if (
+      !ti ||
+      !Array.isArray(ti.localID) ||
+      ti.localID.length !== targetLocalId.length ||
+      !ti.localID.every((v, i) => v === targetLocalId[i])
+    ) {
       remaining.push(ref);
       continue;
     }
@@ -116,7 +124,7 @@ function execResetOverrides(prefabData, op) {
 
   if (removed === 0 && process.env.CC3_MCP_DEBUG) {
     console.warn(
-      `[reset-overrides] stub [${nodeId}]: 未找到匹配 propertyPath=${JSON.stringify(propertyPath)} target=${targetFileId} 的 override（无操作）`
+      `[reset-overrides] stub [${nodeId}]: 未找到匹配 propertyPath=${JSON.stringify(propertyPath)} target=${JSON.stringify(targetLocalId)} 的 override（无操作）`
     );
   }
 

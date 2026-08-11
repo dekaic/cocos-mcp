@@ -118,6 +118,7 @@ const SCHEMAS = {
   'remove-component':        { required: ['node', 'componentType'],                optional: [] },
   'set-component-ref':       { required: ['node', 'componentType', 'property', 'refNode'], optional: ['refType', 'refSubNode'] },
   'set-nested-component-field': { required: ['node', 'componentType', 'property', 'value'], optional: ['subNode'] },
+  'set-nested-node-field':   { required: ['node', 'subNode', 'property', 'value'], optional: [] },
   // bulk-set 的 target 是 "node" 或 "component:<type>" 字符串模式，不是 selector
   'bulk-set':                { required: ['selector', 'target', 'property', 'value'], optional: [], typeOverrides: { target: 'string' } },
   'dedupe-component':        { required: [],                                       optional: ['node'] },

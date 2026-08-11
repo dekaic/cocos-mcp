@@ -97,7 +97,7 @@ var OFFLINE_TOOLS = [
     {
         name: 'prefab_edit',
         description: '[offline] 不需要 Cocos 编辑器运行。声明式批量编辑 prefab 文件，全部 op 成功后一次性落盘。\n' +
-            '支持的 op.op 类型：set-position / set-label-text / set-sprite-frame / set-active / add-node / remove-node / clone-node / add-component / set-component-ref\n' +
+            '支持全部 CLI editPrefab op，包括 set-position / set-component-field / set-nested-component-field / set-nested-node-field / reset-overrides / add-node / remove-node / add-nested-prefab。\n' +
             'op.node / op.parent / op.refNode 可以是节点名称字符串，或 { id: N } 按 __id__ 定位。',
         inputSchema: {
             type: 'object',
@@ -115,7 +115,7 @@ var OFFLINE_TOOLS = [
                             op: { type: 'string' },
                             node: {},
                         },
-                        required: ['op', 'node'],
+                        required: ['op'],
                     },
                 },
             },

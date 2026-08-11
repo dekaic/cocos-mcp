@@ -55,6 +55,8 @@ Supported ops:
   add-component / set-component-ref         # componentType 支持 @ccclass 名或压缩 classId
                                              # set-component-ref 的 refSubNode 可用字符串数组走多层嵌套 stub
   set-nested-component-field                # 仅 stub 节点（嵌套 prefab）改组件字段
+  set-nested-node-field                     # 改 stub 展开后的内部节点字段
+  reset-overrides                           # 按目标与 property 清 override，或 all=true 全清
   dedupe-component                          # 合并同节点重复组件
   ensure-meta                               # 给新建 .ts/.json 创建 .meta（v4 uuid），
                                              # 避免等 cocos 编辑器生成；放在 add-component 前即可

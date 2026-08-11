@@ -53,6 +53,7 @@ Claude Code / MCP agent
 | 改普通节点 Label 文字 | **offline**（prefab_edit） | 同上 |
 | 改普通节点 SpriteFrame | **offline**（prefab_batch，op: set-sprite-frame） | `set` 子命令不支持，必须走 batch |
 | 改 stub 节点普通字段（position / active） | **offline**（prefab_edit） | 工具自动路由到 propertyOverrides |
+| 改 stub 展开后的内部节点字段 | **offline**（prefab_edit） | 使用 `set-nested-node-field`，按嵌套节点 fileId 写 propertyOverrides；可用 `reset-overrides + subNode` 复位 |
 | 改 stub 节点组件字段（Label._string / Sprite._spriteFrame） | **offline**（prefab_edit） | 使用 `set-label-text` / `set-sprite-frame` / `set-nested-component-field`，工具会解析嵌套 prefab 内组件 fileId 并写 propertyOverrides |
 | 查节点树结构 | **offline**（prefab_query）更快 | 纯文件解析，无需编辑器在线；但看不到运行时动态状态 |
 | 查运行时节点状态（动画、数据绑定后） | **editor**（scene_query） | 运行时才有真实数据 |
@@ -106,9 +107,9 @@ editor tool: preview_refresh_and_reload
 → 手动拼 op 绕过高层 API 时必须自己维护。
 → 详见 [prefab-schema.md § 4 坑二](./prefab-schema.md) 和 cli/README.md 地雷二。
 
-### 坑 3：stub 节点组件字段必须走 nested override
+### 坑 3：stub 内部节点或组件字段必须走 nested override
 
-覆写 stub 节点的组件字段（如 `cc.Label._string`、`cc.Sprite._spriteFrame`）不能直接写 stub 节点或使用普通节点的 `set-component-field`。这类字段必须通过 `set-label-text`、`set-sprite-frame` 或 `set-nested-component-field` 写入，工具会跨 prefab 读取目标组件的 `cc.CompPrefabInfo.fileId`，再写入 `cc.PrefabInstance.propertyOverrides`。
+覆写 stub 内部节点字段（如子节点 `_lpos`）或组件字段（如 `cc.Label._string`、`cc.Sprite._spriteFrame`）不能直接写 stub。内部节点字段使用 `set-nested-node-field`；组件字段使用 `set-label-text`、`set-sprite-frame` 或 `set-nested-component-field`。工具会跨 prefab 解析目标 fileId，再写入 `cc.PrefabInstance.propertyOverrides`。
 
 如果绕过这些 op 手写 JSON，编辑器加载后可能静默丢失修改；如果用 `set-component-field` 操作 stub，工具会提示改用 nested 字段路径。
 

@@ -310,7 +310,7 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 
 ## 6. Op 全表
 
-26 个 op，按场景分组。`node` / `parent` / `source` / `target` 均支持上面三种定位形式。
+35 个 op，按场景分组。`node` / `parent` / `source` / `target` 均支持上面三种定位形式。
 
 ### 6.1 节点字段
 
@@ -320,6 +320,7 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 | `rename-node` | `node`, `name` | 改 `_name`。stub 走 propertyOverrides |
 | `set-position` | `node`, `x`, `y`, `z?` | 设置本地位置（绝对值） |
 | `adjust-position` | `node`, `dx?`, `dy?`, `dz?` | `_lpos` 相对偏移，免去先 query 取原值；任一轴缺省视为 0 |
+| `set-nested-node-field` | `node`（stub）, `subNode`, `property`, `value` | 改 stub 展开后的内部节点字段。`subNode` 接节点名，或普通子节点路径 / 多层 nested 路径数组；写入 PrefabInstance.propertyOverrides |
 | `set-node-color` | `node`, `r?`, `g?`, `b?`, `a?` | 改节点 `_color` 分量（0-255），至少提供一个分量。不支持 stub |
 | `reorder-children` | `node`, `order` | 调整子节点顺序，影响 UI 渲染层级。`order` 是子节点名或 `{id:N}` 数组，**必须包含全部子节点** |
 
@@ -330,7 +331,7 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 | `set-component-field` | `node`, `componentType`, `property`, `value` | **普通节点**改任意组件任意字段。`property` 接字符串（顶层）或字符串数组（嵌套路径，如 `["_color","r"]`）。改 cc.Vec2/Vec3/Size 时 `value` 必须带 `__type__` |
 | `set-component-enabled` | `node`, `componentType`, `enabled`, `subNode?` | 改组件 `_enabled`，stub 走 propertyOverrides |
 | `set-nested-component-field` | `node`（stub）, `componentType`, `property`, `value`, `subNode?` | **stub 节点**改内部任意组件的任意字段。`property` 支持字符串或嵌套路径数组。SpriteFrame 等资源 `value` 自备 `{__uuid__,__expectedType__}` |
-| `reset-overrides` | `node`（stub）, `property?`, `componentType?`, `subNode?`, `all?` | 清 stub 已写入的 propertyOverrides。`all: true` 清空整个数组（一键回滚到嵌套默认）；`property` 单条匹配——无 componentType = 节点字段（_lpos / _name 等），有 componentType = 嵌套内组件字段。幂等 |
+| `reset-overrides` | `node`（stub）, `property?`, `componentType?`, `subNode?`, `all?` | 清 stub 已写入的 propertyOverrides。`all: true` 清空整个数组；`property` 单条匹配——有 componentType 定位嵌套组件，无 componentType + subNode 定位嵌套子节点，无二者定位嵌套根节点。幂等 |
 | `ensure-meta` | `path` | 给 `.ts` / `.json` 文件创建 `.meta`（v4 uuid + 按扩展名选模板）。`path` 可绝对或相对项目根。已存在时幂等。**典型用法**：新建脚本 → `ensure-meta` → `add-component` 同 batch 内联动，免等 cocos 编辑器异步 import。dry-run 时不写盘。同 batch 内自动 invalidate classid-resolver cache，让后续 op 能查到新 className |
 
 ### 6.3 cc.UITransform 便捷
@@ -411,6 +412,7 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 | cc.UITransform 尺寸 | `set-size` |
 | 改普通节点任意组件字段（含嵌套路径） | `set-component-field` |
 | 改 stub 内任意组件字段 | `set-nested-component-field` |
+| 改 stub 展开后的内部节点字段 | `set-nested-node-field` |
 | 启用/禁用某组件 | `set-component-enabled` |
 | 改子节点渲染顺序 | `reorder-children` |
 | 一次改一批节点（按组件类型 / 名前缀 / 正则） | `bulk-set` |
@@ -498,6 +500,20 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
   "value": "新文字"
 }
 ```
+
+改 stub 展开后的内部节点字段时，使用 `set-nested-node-field`；这里的 `node` 仍是外层 stub，`subNode` 才是嵌套 prefab 内的目标节点：
+
+```json
+{
+  "op": "set-nested-node-field",
+  "node": {"id": 33},
+  "subNode": "MovableChild",
+  "property": "_lpos",
+  "value": {"__type__": "cc.Vec3", "x": 10, "y": 20, "z": 30}
+}
+```
+
+回滚该字段使用同一组定位信息：`{"op":"reset-overrides","node":{"id":33},"subNode":"MovableChild","property":"_lpos"}`。
 
 ### 7.6 改普通节点 cc.UITransform 锚点 + 保持视觉位置不变
 

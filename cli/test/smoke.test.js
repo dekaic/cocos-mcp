@@ -14,9 +14,18 @@ const os = require('os');
 const { parsePrefab } = require('../src/parse.js');
 const { writePrefab, detectIndent, detectTrailingNewline } = require('../src/write.js');
 const { setOverrideProperty, listOverrides } = require('../src/overrides.js');
+const {
+  fixturePath: FIXTURE_PATH,
+  projectRoot: FIXTURE_PROJECT_ROOT,
+} = require('./fixture-project.js');
 
-const FIXTURE_PATH = path.resolve(__dirname, 'fixtures/HomeUI.prefab');
 const TMP_PATH = path.join(os.tmpdir(), `HomeUI-smoke-${Date.now()}.prefab`);
+
+function parseWithFixtureProject(filePath) {
+  const prefabData = parsePrefab(filePath);
+  prefabData.resolverStartPath = FIXTURE_PROJECT_ROOT;
+  return prefabData;
+}
 
 // 清理临时文件
 after(() => {
@@ -29,7 +38,7 @@ after(() => {
 
 test('parsePrefab: 正常读取 HomeUI.prefab', () => {
   assert.ok(fs.existsSync(FIXTURE_PATH), `fixture 文件不存在: ${FIXTURE_PATH}`);
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
 
   assert.ok(typeof prefabData.raw === 'string' && prefabData.raw.length > 0, 'raw 应是非空字符串');
   assert.ok(Array.isArray(prefabData.elements) && prefabData.elements.length > 0, 'elements 应是非空数组');
@@ -37,7 +46,7 @@ test('parsePrefab: 正常读取 HomeUI.prefab', () => {
 });
 
 test('parsePrefab: getRoot 返回根 cc.Node', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const root = prefabData.getRoot();
   assert.ok(root, 'getRoot() 不应为 null');
   assert.equal(root.__type__, 'cc.Node', 'getRoot() 应返回 cc.Node');
@@ -45,7 +54,7 @@ test('parsePrefab: getRoot 返回根 cc.Node', () => {
 });
 
 test('parsePrefab: resolveRef 按 __id__ 返回正确 element', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const el0 = prefabData.resolveRef({ __id__: 0 });
   assert.equal(el0.__type__, 'cc.Prefab', '__id__=0 应是 cc.Prefab 头');
   const el1 = prefabData.resolveRef({ __id__: 1 });
@@ -53,7 +62,7 @@ test('parsePrefab: resolveRef 按 __id__ 返回正确 element', () => {
 });
 
 test('parsePrefab: findNodeByName 递归查找命名节点', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const node = prefabData.findNodeByName('touchArea');
   assert.ok(node, 'touchArea 节点应能找到');
   assert.equal(node.__type__, 'cc.Node');
@@ -61,13 +70,13 @@ test('parsePrefab: findNodeByName 递归查找命名节点', () => {
 });
 
 test('parsePrefab: findNodeByName 不存在时返回 null', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const node = prefabData.findNodeByName('__this_node_does_not_exist__');
   assert.equal(node, null);
 });
 
 test('parsePrefab: findNodesByType 查找所有 PrefabInstance', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const instances = prefabData.findNodesByType('cc.PrefabInstance');
   assert.ok(Array.isArray(instances) && instances.length > 0, '应找到至少 1 个 PrefabInstance');
   for (const inst of instances) {
@@ -94,7 +103,7 @@ test('detectTrailingNewline: 末尾换行检测', () => {
 });
 
 test('writePrefab: 格式保真 - 缩进和末尾换行与原文件一致', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const originalIndent = detectIndent(prefabData.raw);
   const originalTrailing = detectTrailingNewline(prefabData.raw);
 
@@ -109,7 +118,7 @@ test('writePrefab: 格式保真 - 缩进和末尾换行与原文件一致', () =
 // ─── 端到端：改普通节点 _lpos.x → write → re-parse → 断言 ──
 
 test('端到端: 改普通节点 _lpos.x + 写回 + 验证', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
 
   // 找 'left' 节点（普通节点，非 stub，_lpos.x = -243）
   const leftNode = prefabData.findNodeByName('left');
@@ -126,7 +135,7 @@ test('端到端: 改普通节点 _lpos.x + 写回 + 验证', () => {
   writePrefab(TMP_PATH, prefabData.elements, prefabData.raw);
 
   // 重新解析验证
-  const reparsed = parsePrefab(TMP_PATH);
+  const reparsed = parseWithFixtureProject(TMP_PATH);
   const leftNodeAgain = reparsed.findNodeByName('left');
   assert.ok(leftNodeAgain, '写回后 left 节点仍可查找');
   assert.equal(leftNodeAgain._lpos.x, newX, '_lpos.x 应已更新');
@@ -139,9 +148,9 @@ test('端到端: 改普通节点 _lpos.x + 写回 + 验证', () => {
 // ─── 端到端：改 stub 节点 override → write → re-parse → 断言 ─
 
 test('端到端: 更新 stub 节点已有 override (_lpos) + 写回 + 验证', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
 
-  // stub 节点 index 10（PrefabInfo index 11, fileId='as0LdMaKxSWSLxrZB9u9KA'）
+  // 合成 fixture 的 stub 节点固定在 index 10，PrefabInfo 固定在 index 11。
   // 已有 _lpos override: {x: -272, y: 53, z: 0}
   const STUB_ID = 10;
 
@@ -155,7 +164,7 @@ test('端到端: 更新 stub 节点已有 override (_lpos) + 写回 + 验证', (
   writePrefab(TMP_PATH, prefabData.elements, prefabData.raw);
 
   // 重新解析
-  const reparsed = parsePrefab(TMP_PATH);
+  const reparsed = parseWithFixtureProject(TMP_PATH);
   const overridesAfter = listOverrides(reparsed, STUB_ID);
   const lposAfter = overridesAfter.find((o) => o.propertyPath[0] === '_lpos');
 
@@ -165,7 +174,7 @@ test('端到端: 更新 stub 节点已有 override (_lpos) + 写回 + 验证', (
 });
 
 test('端到端: 新增 stub 节点 override (不存在的属性) + 写回 + 验证', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
 
   const STUB_ID = 10;
   const overridesBefore = listOverrides(prefabData, STUB_ID);
@@ -183,7 +192,7 @@ test('端到端: 新增 stub 节点 override (不存在的属性) + 写回 + 验
   writePrefab(TMP_PATH, prefabData.elements, prefabData.raw);
 
   // 重新解析
-  const reparsed = parsePrefab(TMP_PATH);
+  const reparsed = parseWithFixtureProject(TMP_PATH);
   const overridesFinal = listOverrides(reparsed, STUB_ID);
   const newOverride = overridesFinal.find((o) => o.propertyPath[0] === '__smoke_test_prop');
   assert.ok(newOverride, '新增的 override 在 re-parse 后应能找到');
@@ -194,7 +203,7 @@ test('端到端: 新增 stub 节点 override (不存在的属性) + 写回 + 验
 // ─── JSON diff 精确性验证 ─────────────────────────────────
 
 test('JSON diff 精确：只有目标字段变化', () => {
-  const prefabData = parsePrefab(FIXTURE_PATH);
+  const prefabData = parseWithFixtureProject(FIXTURE_PATH);
   const touchArea = prefabData.findNodeByName('touchArea');
   assert.ok(touchArea, 'touchArea 应存在');
 
@@ -203,7 +212,7 @@ test('JSON diff 精确：只有目标字段变化', () => {
 
   writePrefab(TMP_PATH, prefabData.elements, prefabData.raw);
 
-  const reparsed = parsePrefab(TMP_PATH);
+  const reparsed = parseWithFixtureProject(TMP_PATH);
 
   // 验证目标字段变化
   const touchAreaAgain = reparsed.findNodeByName('touchArea');
@@ -215,7 +224,6 @@ test('JSON diff 精确：只有目标字段变化', () => {
   assert.equal(root._lpos.x, 0, '根节点 _lpos.x 不应变化');
 
   // 验证总 element 数量不变（没有意外新增/删除）
-  const origParsed = parsePrefab(FIXTURE_PATH);
+  const origParsed = parseWithFixtureProject(FIXTURE_PATH);
   assert.equal(reparsed.elements.length, origParsed.elements.length, 'element 总数应不变');
 });
-

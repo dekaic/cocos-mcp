@@ -17,9 +17,9 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { fixturePath: FIXTURE } = require('./fixture-project.js');
 
 const BIN = path.resolve(__dirname, '../bin/cocos-mcp-cli.js');
-const FIXTURE = path.resolve(__dirname, 'fixtures/HomeUI.prefab');
 
 function run(args) {
   return spawnSync(process.execPath, [BIN, ...args], {

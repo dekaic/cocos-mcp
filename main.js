@@ -446,7 +446,7 @@ async function startMcpServer() {
 
     var server = sdk.createServer({
         name: 'cocos-mcp',
-        version: '2.0.0',
+        version: '1.0.0',
         port: port,
         tools: toolDefs.map(function (t) {
             return {

@@ -37,7 +37,7 @@ var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
 var DISCOVERY_INTERVAL_MS = 15 * 1000;
 var PROTOCOL_VERSION = '2024-11-05';
-var ROUTER_INFO = { name: 'cocos-mcp-router', version: '3.0.0' };
+var ROUTER_INFO = { name: 'cocos-mcp-router', version: '3.0.0-test.0' };
 var nextForwardId = 1000;
 
 function logErr() {

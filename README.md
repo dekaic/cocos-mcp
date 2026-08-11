@@ -4,7 +4,9 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
 把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
 
-## 3.0.0 V3 Lab
+## 3.0.0-test.0 V3 测试版本
+
+当前分支为 `test/v3.0/mcp-architecture`，仅用于测试和验证，不作为稳定发布使用。稳定版本为 `main` / `stable/v1.0` 上的 `v1.0.0`。
 
 V3 把 MCP 从“多实例工具聚合器”升级为显式项目作用域的命令通道：
 

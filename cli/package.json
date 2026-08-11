@@ -1,6 +1,6 @@
 {
   "name": "cocos-mcp-cli",
-  "version": "3.0.0",
+  "version": "3.0.0-test.0",
   "private": true,
   "bin": { "cocos-mcp-cli": "./bin/cocos-mcp-cli.js" },
   "main": "./src/index.js",

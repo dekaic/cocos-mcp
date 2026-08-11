@@ -1,6 +1,6 @@
 # Cocos MCP 贡献与分支规范
 
-本文是 `cocos-mcp` 的 Git 分支、worktree、验证、合并与发布规范。`main` 是唯一正式代码线；2D/3D Lab 是开发和验证环境，Template 是稳定版本使用与回归环境，不是独立产品分支。
+本文是 `cocos-mcp` 的 Git 分支、worktree、验证、合并与发布规范。`main` 是唯一稳定代码线，当前稳定版本为 `v1.0.0`；`test/*` 分支仅用于开发和验证，不作为稳定发布。
 
 ## 基本原则
 
@@ -22,12 +22,15 @@
 | `docs/<topic>` | 最新 `main` | 独立文档修改 | 合并后删除 |
 | `hotfix/v<major>.<minor>.<patch>/<topic>` | 对应稳定标签或维护分支 | 已发布版本补丁 | 发布并前向合并后删除 |
 | `integration/v<major>.<minor>` | 最新 `main` | 跨范围发布候选组合验证 | 发布后删除 |
-| `release/v<major>.<minor>` | 最新稳定提交或标签 | 稳定维护线 | 结束维护后删除 |
+| `stable/v<major>.<minor>` | 对应稳定标签 | 稳定维护线 | 结束维护后删除 |
+| `test/v<major>.<minor>` | 稳定主线或测试版本线 | 集成测试与候选验证 | 测试结束后删除 |
 
 `v<major>.<minor>` 表示目标版本线，精确发布版本由 `v<major>.<minor>.<patch>` 标签表示。分支不使用 `2d`、`3d` 等项目环境作为命名标签；模块或能力范围写入 `topic`。例如：
 
 ```text
-release/v2.1
+stable/v1.0
+test/v2.1
+test/v3.0/mcp-architecture
 feat/v3.0/project-scoped-routing
 fix/v2.1/scene-property-dump-path
 optimize/v2.1/router-editor-discovery
@@ -41,8 +44,8 @@ hotfix/v2.1.0/scene-property-dump-path
 | 环境 | 常态 | 允许的操作 |
 |---|---|---|
 | 主仓库 worktree | `main` | 合并、发布、打标签；不直接开发 |
-| 2D MCP Lab | 稳定标签、`release/vX.Y`、版本任务分支或候选 SHA | 2D 开发与验证 |
-| 3D MCP Lab | 稳定标签、`release/vX.Y`、版本任务分支或候选 SHA | 3D 开发与验证 |
+| 2D MCP Lab | 稳定标签、`test/vX.Y`、版本任务分支或候选 SHA | 2D 开发与验证 |
+| 3D MCP Lab | 稳定标签、`test/vX.Y`、版本任务分支或候选 SHA | 3D 开发与验证 |
 | 2D Template | 发布标签的 detached HEAD | 稳定使用与回归 |
 | 3D Template | 发布标签的 detached HEAD | 稳定使用与回归 |
 
@@ -53,7 +56,7 @@ Lab 目录没有专属长期分支。空闲时固定稳定标签或维护线，�
 ## 开发流程
 
 1. 获取最新远端状态，确认所有相关 worktree 干净。
-2. 从目标版本线创建单一职责的任务分支：下一版本通常基于最新 `main`，稳定版修复基于对应 `release/vX.Y` 或标签。
+2. 从目标版本线创建单一职责的任务分支：稳定版修复基于 `main`、`stable/vX.Y` 或稳定标签；测试能力基于对应 `test/vX.Y`。
 3. 在发现问题的 Lab 中实现，并为缺陷增加可复现的回归测试。
 4. 保持提交可理解、可回滚；不要混入项目资源或无关格式化。
 5. 按验证矩阵测试同一个候选提交 SHA。

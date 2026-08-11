@@ -235,20 +235,64 @@ function defineTools(ctx) {
         // ── asset-db 域 ──
         {
             name: 'asset_query_assets',
-            description: '按 pattern 列出资源（glob，如 db://assets/**/*.prefab）',
+            description: '按 pattern 列出资源（glob，如 db://assets/**/*.prefab）。offset/limit 为可选分页；省略时兼容旧行为返回全部。fields 可投影顶层字段。',
             inputSchema: {
                 type: 'object',
                 properties: {
                     pattern: { type: 'string' },
                     ccType: { type: 'string', description: '可选：cc 类型过滤，如 cc.Prefab' },
+                    offset: { type: 'integer', minimum: 0, description: '可选：从第几项开始，默认 0' },
+                    limit: { type: 'integer', minimum: 1, description: '可选：最多返回多少项；省略时不截断' },
+                    fields: {
+                        type: 'array',
+                        minItems: 1,
+                        uniqueItems: true,
+                        items: { type: 'string', minLength: 1 },
+                        description: '可选：仅返回每项指定的顶层字段，如 ["url","uuid","type"]',
+                    },
                 },
             },
             handler: async function (args) {
+                var offset = args.offset === undefined ? 0 : args.offset;
+                var limit = args.limit === undefined ? null : args.limit;
+                var fields = args.fields;
+                if (!Number.isInteger(offset) || offset < 0) {
+                    throw new Error('asset_query_assets: offset 必须是非负整数');
+                }
+                if (limit !== null && (!Number.isInteger(limit) || limit < 1)) {
+                    throw new Error('asset_query_assets: limit 必须是正整数');
+                }
+                if (fields !== undefined && (!Array.isArray(fields) || fields.length === 0 || fields.some(function (field) {
+                    return typeof field !== 'string' || field.length === 0;
+                }))) {
+                    throw new Error('asset_query_assets: fields 必须是非空字符串数组');
+                }
                 var assets = await msg('asset-db', 'query-assets', {
                     pattern: args.pattern,
                     ccType: args.ccType,
                 });
-                return { assets: assets || [] };
+                assets = assets || [];
+                var page = assets.slice(offset, limit === null ? undefined : offset + limit);
+                if (fields !== undefined) {
+                    page = page.map(function (asset) {
+                        if (!asset || typeof asset !== 'object' || Array.isArray(asset)) return asset;
+                        var projected = {};
+                        fields.forEach(function (field) {
+                            if (Object.prototype.hasOwnProperty.call(asset, field)) projected[field] = asset[field];
+                        });
+                        return projected;
+                    });
+                }
+                var nextOffset = offset + page.length;
+                var hasMore = nextOffset < assets.length;
+                return {
+                    assets: page,
+                    total: assets.length,
+                    offset: offset,
+                    limit: limit,
+                    hasMore: hasMore,
+                    nextOffset: hasMore ? nextOffset : null,
+                };
             },
         },
         {

@@ -33,6 +33,7 @@
 3. 校验 `pid` 仍存活。
 4. 多个匹配时取 `updatedAt` 最新的记录。
 5. 后续所有 HTTP MCP 请求都使用该记录的 `url`。
+6. 验证扩展代码变化时同时核对 `runtimeBuildId`、`toolSchemaHash` 和 `loadedAt`；工作树当前 HEAD/dirty 不能证明进程已加载新代码。
 
 快速确认脚本：
 
@@ -122,6 +123,8 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 
 `.dev/refresh` 只承载 `restart-package`。
 
+`restart-package` 仍是无返回值的 fire-and-forget 信号。`local_reload_package` 返回 `state: "scheduled"`、`completionObserved: false` 和重载前 identity；这仍只表示已受理。如果 registry/status 中的 runtime identity 没有变化，必须完整重启 Creator 后再验证代码。
+
 ## CLI 与 MCP 分工
 
 | 操作 | 推荐入口 |
@@ -135,6 +138,12 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 | 调组件方法或改运行态属性 | `scene_execute_component_method` / `scene_set_property` |
 | 拿预览 URL | `preview_query_url` |
 | 刷新预览 | `preview_refresh_and_reload` |
+
+`meta_fix` 省略 `dryRun` 时默认等价于 `dryRun:true`。实际写入必须显式调用 `meta_fix({dryRun:false})`，并且调用前已经取得对应 `.meta` 的具体写入授权。
+
+`asset_query_assets` 可传 `offset`、`limit` 和 `fields` 控制响应；为兼容既有调用，省略分页参数仍返回全部匹配项。大工程应主动传 `limit` 和字段投影。
+
+direct HTTP server 与 router 都会在 handler/转发前检查 tool schema 顶层 `required` 字段；这不等于完整 JSON Schema 校验，selector 条件等仍由具体 tool 实现验证。
 
 结构化资源文件优先走 CLI 或 MCP tool。纯文本说明文档才直接编辑。
 
@@ -157,6 +166,6 @@ browser_take_screenshot
 
 1. 没有匹配 `projectPath` 的注册文件：确认 Cocos 编辑器已打开当前项目，并且扩展已启用。
 2. `pid` 不存活：忽略该注册文件，等编辑器重新注册。
-3. HTTP MCP endpoint 不通：用 `.dev/refresh` 的 `restart-package` 重启扩展；仍不通就重启编辑器。
+3. HTTP MCP endpoint 不通：可用 `.dev/refresh` 的 `restart-package` 调度扩展 reload；若 endpoint 或 runtime identity 未更新，就完整重启编辑器。
 4. MCP 返回的预览 URL 为空：确认编辑器预览已启动。
 5. 工具行为异常或文档与实际不一致：反馈插件问题，由用户决定是否修插件本身。

@@ -41,7 +41,7 @@ Claude Code (MCP client)
     │                │
     ▼                ▼
 编辑器实例 A      编辑器实例 B       ← 每个项目一个编辑器进程
-server/mcp-server.js              ← 在 Cocos 编辑器进程内跑 HTTP MCP server
+main.js + server/tools.js         ← HTTP MCP 生命周期 + tool/resource 定义
 ```
 
 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行。
@@ -52,7 +52,7 @@ offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 rou
 
 ### 1. 编辑器扩展（`main.js` + panel + server）
 
-在 Cocos Creator 编辑器进程内运行。启动时拉起 `server/mcp-server.js`（HTTP MCP server），并把自身信息写入 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。
+在 Cocos Creator 编辑器进程内运行。`main.js` 使用 `mcp-sdk` 启动 HTTP MCP Server，`server/tools.js` 定义 tools/resources，并把实例信息写入 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。
 
 **暴露的 tool 域**：
 

@@ -323,6 +323,29 @@ function findEditorByPrefixedTool(prefixedName) {
     return null;
 }
 
+function missingRequiredArguments(tool, args) {
+    var required = tool && tool.inputSchema && Array.isArray(tool.inputSchema.required)
+        ? tool.inputSchema.required
+        : [];
+    var input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+    return required.filter(function (key) {
+        return !Object.prototype.hasOwnProperty.call(input, key) || input[key] === undefined;
+    });
+}
+
+function requiredArgumentsError(toolName, tool, args) {
+    var missing = missingRequiredArguments(tool, args);
+    if (!missing.length) return null;
+    var label = missing.length === 1 ? 'argument' : 'arguments';
+    return {
+        content: [{
+            type: 'text',
+            text: '[Error] [' + toolName + '] Missing required ' + label + ': ' + missing.join(', '),
+        }],
+        isError: true,
+    };
+}
+
 // ── stdio JSON-RPC ──
 
 var stdinBuf = '';
@@ -426,11 +449,17 @@ async function handleToolCall(name, args) {
 
     // Offline prefab tools（不需要编辑器运行，同进程调用 cli）
     if (offlineTools.isOfflineTool(name)) {
+        var offlineDef = offlineTools.OFFLINE_TOOLS.find(function (tool) { return tool.name === name; });
+        var offlineArgsError = requiredArgumentsError(name, offlineDef, args);
+        if (offlineArgsError) return offlineArgsError;
         return await offlineTools.handleOfflineToolCall(name, args);
     }
 
     // 编辑器进程管理 tools（spawn/kill/restart/wait_ready，router 本地执行，不走转发）
     if (editorControl.isEditorTool(name)) {
+        var editorDef = editorControl.EDITOR_TOOLS.find(function (tool) { return tool.name === name; });
+        var editorArgsError = requiredArgumentsError(name, editorDef, args);
+        if (editorArgsError) return editorArgsError;
         return await editorControl.handleEditorToolCall(name, args);
     }
 
@@ -443,6 +472,10 @@ async function handleToolCall(name, args) {
     if (!hit) {
         return { content: [{ type: 'text', text: 'unknown tool: ' + name + '\n可用编辑器: ' + Array.from(editors.values()).map(function(e){return e.shortName;}).join(', ') }], isError: true };
     }
+
+    var forwardedDef = hit.editor.tools.find(function (tool) { return tool.name === hit.originalName; });
+    var forwardedArgsError = requiredArgumentsError(hit.originalName, forwardedDef, args);
+    if (forwardedArgsError) return forwardedArgsError;
 
     try {
         var forward = await httpJsonRpc(hit.editor.url, {

@@ -4,9 +4,11 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
 
 把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
 
-## 2.1.x 稳定版本
+## 2.1.1 测试版本
 
-`v2.1.0` 针对 Creator 3.8.x 长驻开发流程收口了一批可复现问题：编辑器就绪判定、`.dev/refresh` 生命周期、Router 工具变更通知、完整 offline schema，以及 Scene/Asset 严格失败语义、Prefab UUID、嵌套 override、标准 AnimationClip、子树提取、批处理原子性和构建产物校验。`v2.1.1` 进一步修复 Inspector value wrapper 下的 Scene 属性 dump path 解析。150 项回归均为自包含测试，不依赖未提交的私有 Prefab fixture。
+当前分支为 `test/v2.1`，版本号 `2.1.1-test.0`，仅用于测试和验证，不作为稳定发布使用。稳定版本为 `main` / `stable/v1.0` 上的 `v1.0.0`。
+
+`2.1.0-test.0` 针对 Creator 3.8.x 长驻开发流程收口了一批可复现问题：编辑器就绪判定、`.dev/refresh` 生命周期、Router 工具变更通知、完整 offline schema，以及 Scene/Asset 严格失败语义、Prefab UUID、嵌套 override、标准 AnimationClip、子树提取、批处理原子性和构建产物校验。`2.1.1-test.0` 进一步修复 Inspector value wrapper 下的 Scene 属性 dump path 解析。150 项回归均为自包含测试，不依赖未提交的私有 Prefab fixture。
 
 ---
 

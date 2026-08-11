@@ -438,15 +438,30 @@ function defineTools(ctx) {
         // ── local 域 ──
         {
             name: 'local_reload_package',
-            description: 'reload（disable→enable）指定编辑器扩展，让其 JS 代码改动生效，无需重启编辑器。本质 Editor.Package.disable→enable，fire-and-forget 立即返回。',
+            description: '调度指定编辑器扩展 disable→enable。返回 state=scheduled 只表示已受理，completionObserved=false；重载 cocos-mcp 后须比较 runtimeIdentityBefore 与新 registry/status。',
             inputSchema: {
                 type: 'object',
                 properties: { name: { type: 'string', description: '扩展名（package.json 的 name，如 state-ctrl-gen）' } },
                 required: ['name'],
             },
             handler: async function (args) {
+                var status = await local.getStatus();
+                var before = args.name === 'cocos-mcp' && status && status.extensionRuntime
+                    ? {
+                        runtimeBuildId: status.extensionRuntime.runtimeBuildId,
+                        toolSchemaHash: status.extensionRuntime.toolSchemaHash,
+                        loadedAt: status.extensionRuntime.loadedAt,
+                    }
+                    : null;
                 local.reloadPackage(args.name);
-                return { ok: true, reloaded: args.name };
+                return {
+                    ok: true,
+                    reloaded: args.name,
+                    accepted: true,
+                    state: 'scheduled',
+                    completionObserved: false,
+                    runtimeIdentityBefore: before,
+                };
             },
         },
         {

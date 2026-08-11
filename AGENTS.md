@@ -123,7 +123,7 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 
 `.dev/refresh` 只承载 `restart-package`。
 
-`restart-package` 仍是无返回值的 fire-and-forget 信号。`local_reload_package` 返回 `state: "scheduled"`、`completionObserved: false` 和重载前 identity；这仍只表示已受理。如果 registry/status 中的 runtime identity 没有变化，必须完整重启 Creator 后再验证代码。
+`restart-package` 仍是无返回值的 fire-and-forget 信号。它只清除目标扩展目录（含软链真实目录）内的 Node 模块缓存，再调用 Creator Extension Manager reload，不得清除 Creator 或其他扩展的缓存。`local_reload_package` 返回 `state: "scheduled"`、`completionObserved: false` 和重载前 identity；调用方必须等待 router 重新发现实例，并确认 registry/status 的 `loadedAt` 已变化。只有 `loadedAt` 仍不变时，才完整重启 Creator。
 
 ## CLI 与 MCP 分工
 
@@ -166,6 +166,6 @@ browser_take_screenshot
 
 1. 没有匹配 `projectPath` 的注册文件：确认 Cocos 编辑器已打开当前项目，并且扩展已启用。
 2. `pid` 不存活：忽略该注册文件，等编辑器重新注册。
-3. HTTP MCP endpoint 不通：可用 `.dev/refresh` 的 `restart-package` 调度扩展 reload；若 endpoint 或 runtime identity 未更新，就完整重启编辑器。
+3. HTTP MCP endpoint 不通：可用 `.dev/refresh` 的 `restart-package` 调度扩展 reload；若 endpoint 未恢复或 `loadedAt` 未更新，就完整重启编辑器。
 4. MCP 返回的预览 URL 为空：确认编辑器预览已启动。
 5. 工具行为异常或文档与实际不一致：反馈插件问题，由用户决定是否修插件本身。

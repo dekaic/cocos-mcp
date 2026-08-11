@@ -4,6 +4,7 @@ var fs = require('fs');
 var path = require('path');
 var { exec } = require('child_process');
 var runtimeIdentity = require('./server/runtime-identity');
+var packageReload = require('./server/package-reload');
 
 var _runtimeIdentity = runtimeIdentity.createRuntimeIdentity(__dirname);
 
@@ -533,34 +534,24 @@ async function doOpenPrefab(urlOrPath) {
     log('open-prefab: opened ' + dbUrl + ' (uuid=' + uuid + ')');
 }
 
-/** 重启指定插件（disable → enable）让其 JS 代码改动生效；name 缺省为本插件 cocos-mcp。
+/** 通过 Creator 自带的扩展管理器重新加载指定插件；name 缺省为本插件 cocos-mcp。
  *  注意：reload 本插件自身时，本函数处于即将被卸载的 main.js 上下文，必须 fire-and-forget。
- *  Editor.Package.disable 是 host 进程 API，扩展沙箱卸载后仍然有效；
- *  enable 在 disable 完成后用 setTimeout 触发，给 unload 收尾留窗口。
- *  ⚠️ disable/enable 的参数是扩展**绝对路径**不是 name（typings: enable(path) /
- *  disable(path, options)）——传 name 会 disable 静默不生效 + enable 报
- *  "[Package] Unknown and unable to start"，必须先用 getPackages 反查注册路径。
+ *  不能只调用 Editor.Package.disable → enable：Creator 会复用旧的 CommonJS 模块对象，
+ *  生命周期会重启，但改动后的 JS 与 loadedAt 不会更新。扩展管理器的 reload 消息会执行
+ *  Creator 自己的完整刷新流程。
  */
 function doRestartSelf(name) {
     name = name || 'cocos-mcp';
-    log('restart-package: scheduling disable → enable for ' + name);
+    log('restart-package: scheduling Extension Manager reload for ' + name);
     setImmediate(function () {
         Promise.resolve()
             .then(function () {
-                if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) return name;   // 已是路径直接用
-                var list = (Editor.Package.getPackages() || []).filter(function (p) {
-                    return p && (p.name === name || (p.info && p.info.name === name));
-                });
-                if (!list.length || !list[0].path) {
-                    throw new Error('找不到扩展 "' + name + '" 的注册路径（getPackages 匹配 ' + list.length + ' 条）');
-                }
-                return list[0].path;
+                return packageReload.resolvePackagePath(Editor.Package, name);
             })
             .then(function (pkgPath) {
-                return Promise.resolve(Editor.Package.disable(pkgPath))
-                    // 200ms 给 unload 钩子（stopRefreshWatcher / stopMcpServer）跑完
-                    .then(function () { return new Promise(function (r) { setTimeout(r, 200); }); })
-                    .then(function () { return Editor.Package.enable(pkgPath); });
+                var removed = packageReload.purgePackageRequireCache(pkgPath);
+                log('restart-package: purged ' + removed.length + ' cached module(s) under ' + pkgPath);
+                return Editor.Message.request('extension', 'reload', pkgPath);
             })
             .catch(function (err) {
                 console.error('[restart-package] failed:', err && (err.stack || err.message) || err);

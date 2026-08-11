@@ -165,7 +165,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `local_list_worktrees` | 列出同机所有 worktree |
 | `local_open_dev_dir` | 在 Finder 中打开 .dev 目录 |
 | `local_clean_dev_dir` | 清理 .dev 临时文件 |
-| `local_reload_package` | 调度扩展 disable → enable；返回 `state=scheduled`、`completionObserved=false` 和重载前 identity |
+| `local_reload_package` | 清除目标扩展自身的模块缓存并调度 Creator Extension Manager reload；返回 `state=scheduled`、`completionObserved=false` 和重载前 identity |
 | `meta_fix` | 基于 Git 对比修复特定图片 `.meta` 噪音；默认 `dryRun=true`，显式 `dryRun=false` 才写入 |
 
 ### offline 域（router 级，无需编辑器运行）
@@ -237,13 +237,13 @@ claude mcp add cocos -- node /path/to/cocos-mcp/router/bin.js
 
 外部往 `<project>/.dev/refresh` 文件写一行命令，编辑器扩展的 watcher 读到后执行并清空文件。fire-and-forget，无返回值。
 
-协议精简：**只支持 `restart-package`**——调度扩展 disable → enable。资源刷新 / 场景重载 / 预览刷新都走 MCP tool（`preview_refresh_and_reload` / `asset_reimport` 等）或面板按钮；浏览器截图和交互验证交给 Playwright / Chrome。
+协议精简：**只支持 `restart-package`**——清除目标扩展目录内的 Node 模块缓存，再调度 Creator Extension Manager reload。资源刷新 / 场景重载 / 预览刷新都走 MCP tool（`preview_refresh_and_reload` / `asset_reimport` 等）或面板按钮；浏览器截图和交互验证交给 Playwright / Chrome。
 
 ```bash
 echo "restart-package" > .dev/refresh
 ```
 
-面板上的「重启 MCP Server」按钮只重启 HTTP server 实例，Node require 缓存不动，**不能证明 `main.js` 代码已重载**。`restart-package` 是无返回值的 fire-and-forget 信号；`local_reload_package` 会明确返回 `state: "scheduled"`、`completionObserved: false` 和 `runtimeIdentityBefore`，保留的 `ok` / `reloaded` 字段仅用于兼容旧调用。验证扩展代码时应比较后续 registry/status 的 `runtimeBuildId` / `loadedAt`；若未变化，完整重启 Creator。
+面板上的「重启 MCP Server」按钮只重启 HTTP server 实例，Node require 缓存不动，**不能证明 `main.js` 代码已重载**。`restart-package` 是无返回值的 fire-and-forget 信号；`local_reload_package` 会明确返回 `state: "scheduled"`、`completionObserved: false` 和 `runtimeIdentityBefore`，保留的 `ok` / `reloaded` 字段仅用于兼容旧调用。调用方应等待 router 重新发现实例，并比较新 registry/status 的 `loadedAt`；时间戳必须变化。`runtimeBuildId` 与 `toolSchemaHash` 只有在相应源码或 schema 改变时才应变化。
 
 ---
 
@@ -254,7 +254,7 @@ echo "restart-package" > .dev/refresh
 3. **offline 改完后需手动触发刷新**：直接写磁盘 Cocos 编辑器不会自动感知。改完后调用 `asset_reimport`（编辑器在线时）或 `preview_refresh_and_reload`，否则编辑器和预览页面看到的仍是旧内容
 4. **分页为兼容性 opt-in**：`asset_query_assets` 省略 `limit` 时仍返回全部匹配项；分页减少 MCP wire payload，但 Cocos AssetDB 仍先产生完整匹配数组
 5. **参数校验范围**：当前统一检查顶层 `required` 字段，不执行完整 JSON Schema 类型、嵌套或条件校验
-6. **扩展 reload 不可同步确认**：`local_reload_package` 只报告 scheduled；Creator 3.8.8 可能不重建扩展沙箱，必须继续比较 runtime identity
+6. **扩展 reload 不可同步确认**：reload 会中断当前扩展自己的 MCP endpoint，所以 `local_reload_package` 只报告 scheduled；调用方必须从 router/registry 观察新 `loadedAt`
 
 ---
 

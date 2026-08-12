@@ -10,7 +10,7 @@
 |---|---|
 | 当前项目 MCP 实例 | `scene` / `asset-db` / `preview` / `local` 域操作 |
 | 当前项目 HTTP MCP endpoint | 当前 agent 没注入 MCP tool 时的等价入口 |
-| `cocos-mcp-cli` offline 命令 | `.prefab` / `.anim` 文件查询和修改 |
+| `cocos-mcp-cli` offline 命令 | `.prefab` 查询和修改、`.anim` 查询 |
 | Playwright / Chrome | 浏览器里真实游戏页面的交互验证 |
 | `.dev/refresh` 的 `restart-package` | 重启本扩展代码 |
 
@@ -131,7 +131,8 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 |---|---|
 | 查 prefab 节点树 / 组件字段 | `prefab_query` 或 `cocos-mcp-cli query` |
 | 批量改 prefab | `prefab_edit` / `prefab_batch` 或 `cocos-mcp-cli batch` |
-| 改 `.anim` 结构 | `cocos-mcp-cli anim` |
+| 查 `.anim` 轨道与关键帧 | `animation_query` 或 `cocos-mcp-cli anim query` |
+| 新建数值曲线 `.anim` | `animation_create` |
 | 查 AssetDB 资源信息 | `asset_query_assets` / `asset_query_info` |
 | 重导资源 | `asset_reimport` |
 | 查场景运行态节点 | `scene_query_node_tree` / `scene_query_node` |

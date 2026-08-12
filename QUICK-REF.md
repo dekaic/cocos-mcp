@@ -93,7 +93,8 @@ node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 跑 ops.json | `batch <prefab> <ops.json>` |
 | 干跑预览（不写盘） | `batch <prefab> <ops.json> --dry-run` |
 | 跨多个 prefab 跑同一组 ops | `batch <ops.json> --glob "<pattern>"`（先 `--dry-run` 确认匹配） |
-| 操作 .anim 文件 | `anim query` / `anim batch <file> <ops.json>` |
+| 查询 .anim 轨道与关键帧 | `anim query <file> --selector tree` 或 `animation_query` |
+| 新建数值曲线 .anim | router offline tool `animation_create`（目标已存在时拒绝覆盖） |
 | 单字段快捷写入（active / label.text / position.x\|y\|z） | `set <prefab> <nodeName> <field> <value>` |
 | 创建新 prefab（最小 root + UITransform） | `create-prefab <out> [--name X] [--width W] [--height H]` |
 | 创建 spine prefab（root + UITransform + sp.Skeleton） | `create-prefab <out> --add-spine <skel-uuid>`，批量靠 shell `for` 循环喂 .skel.meta 的 uuid |

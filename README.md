@@ -1,8 +1,8 @@
 # cocos-mcp
 
-Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab 读写 CLI。
+Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab / AnimationClip 工具。
 
-把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑能力，支持节点增删克隆与 stub 节点属性覆写。
+把编辑器的 scene/asset/preview/local 能力以 MCP 协议暴露给 Claude Code；同时提供无需编辑器运行的 offline prefab 编辑，以及 AnimationClip 查询和数值曲线创建能力。
 
 ## 版本状态
 
@@ -34,7 +34,7 @@ Claude Code (MCP client)
 ┌─────────────────────────────┐
 │  router/bin.js              │  ← 统一入口，聚合多个编辑器
 │  - 扫 ~/.cocos-mcp/editors/ │
-│  - offline prefab tools     │
+│  - offline resource tools   │
 └───────────┬─────────────────┘
             │  HTTP MCP (JSON-RPC)
     ┌───────┴────────┐
@@ -44,7 +44,10 @@ Claude Code (MCP client)
 main.js + server/tools.js         ← HTTP MCP 生命周期 + tool/resource 定义
 ```
 
-offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行。
+offline resource tools 在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行：
+
+- prefab：`prefab_query` / `prefab_edit` / `prefab_batch`
+- AnimationClip：`animation_query` / `animation_create`
 
 ---
 
@@ -72,7 +75,7 @@ offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`）在 rou
 - 扫描 `~/.cocos-mcp/editors/` 发现活跃编辑器（心跳超 120s 视为已死）
 - 每隔 15s 自动发现新实例
 - 给每个编辑器的 tool 加 `<shortName>__` 前缀，合并后暴露给 Claude Code
-- 内置 offline prefab tools（`prefab_query` / `prefab_edit` / `prefab_batch`），不带前缀，全局可用
+- 内置 offline prefab 与 AnimationClip tools，不带前缀，全局可用
 
 **tool 路由示例**：
 

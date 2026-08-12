@@ -3,8 +3,8 @@
 /**
  * router/src/offline-tools.js
  *
- * Router 级 offline prefab tool 定义。
- * 这些 tool 直接调用 cli/src/index.js 的 editPrefab / queryPrefab，
+ * Router 级 offline resource tool 定义。
+ * 这些 tool 直接调用 cli/src/index.js 的 prefab / AnimationClip API，
  * 同进程执行，无需 Cocos 编辑器运行。
  *
  * [offline] tool 命名不加 shortName 前缀（router 全局工具）。
@@ -142,6 +142,97 @@ var OFFLINE_TOOLS = [
             required: ['filePath', 'opsJsonPath'],
         },
     },
+    {
+        name: 'animation_query',
+        description: '[offline] 不需要 Cocos 编辑器运行。查询 Creator 3.8 AnimationClip 的轨道、路径、通道和关键帧。\n' +
+            'filePath 必须是 .anim 文件的绝对路径。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                filePath: {
+                    type: 'string',
+                    description: 'AnimationClip .anim 文件的绝对路径',
+                },
+            },
+            required: ['filePath'],
+        },
+    },
+    {
+        name: 'animation_create',
+        description: '[offline] 不需要 Cocos 编辑器运行。创建新的 Creator 3.8 AnimationClip。\n' +
+            '当前支持 UntypedTrack + RealCurve 数值通道；目标文件已存在时拒绝覆盖。',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                filePath: {
+                    type: 'string',
+                    description: '新 .anim 文件的绝对路径；父目录必须已存在',
+                },
+                clip: {
+                    type: 'object',
+                    properties: {
+                        name: { type: 'string', minLength: 1 },
+                        duration: { type: 'number', exclusiveMinimum: 0 },
+                        sample: { type: 'integer', minimum: 1, description: '默认 60' },
+                        speed: { type: 'number', description: '默认 1' },
+                        wrapMode: {
+                            type: 'string',
+                            enum: ['normal', 'loop', 'ping-pong', 'ping-pong-loop'],
+                            description: '默认 normal',
+                        },
+                        tracks: {
+                            type: 'array',
+                            minItems: 1,
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    nodePath: { type: 'string', minLength: 1 },
+                                    component: { type: 'string', minLength: 1 },
+                                    property: { type: 'string', minLength: 1 },
+                                    channels: {
+                                        type: 'array',
+                                        minItems: 1,
+                                        items: {
+                                            type: 'object',
+                                            properties: {
+                                                property: { type: 'string', minLength: 1 },
+                                                keyframes: {
+                                                    type: 'array',
+                                                    minItems: 1,
+                                                    items: {
+                                                        type: 'object',
+                                                        properties: {
+                                                            time: { type: 'number', minimum: 0 },
+                                                            value: { type: 'number' },
+                                                            interpolation: {
+                                                                type: 'string',
+                                                                enum: ['linear', 'constant', 'cubic'],
+                                                                description: '默认 linear',
+                                                            },
+                                                            easingMethod: {
+                                                                type: 'integer',
+                                                                minimum: 0,
+                                                                description: '默认 0',
+                                                            },
+                                                        },
+                                                        required: ['time', 'value'],
+                                                    },
+                                                },
+                                            },
+                                            required: ['property', 'keyframes'],
+                                        },
+                                    },
+                                },
+                                required: ['property', 'channels'],
+                            },
+                        },
+                    },
+                    required: ['name', 'duration', 'tracks'],
+                },
+            },
+            required: ['filePath', 'clip'],
+        },
+    },
 ];
 
 // ── Tool 名称集合（用于快速判断是否是 offline tool）──────────────
@@ -204,6 +295,22 @@ async function handleOfflineToolCall(name, args) {
         var batchResult = cli.editPrefab(args.filePath, ops);
         return {
             content: [{ type: 'text', text: JSON.stringify(batchResult, null, 2) }],
+        };
+    }
+
+    if (name === 'animation_query') {
+        requireAbsolutePath(args.filePath, 'animation_query');
+        var animationResult = cli.queryAnimationClip(args.filePath);
+        return {
+            content: [{ type: 'text', text: JSON.stringify(animationResult, null, 2) }],
+        };
+    }
+
+    if (name === 'animation_create') {
+        requireAbsolutePath(args.filePath, 'animation_create');
+        var createResult = cli.createAnimationClip(args.filePath, args.clip);
+        return {
+            content: [{ type: 'text', text: JSON.stringify(createResult, null, 2) }],
         };
     }
 

@@ -186,6 +186,44 @@ test('CLI query 文件不存在: 非零退出', () => {
   assert.notEqual(result.status, 0);
 });
 
+test('CLI anim query: Creator AnimationClip 返回标准化轨道，而不是 Prefab 根错误', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-anim-cli-'));
+  const animPath = path.join(dir, 'position.anim');
+  fs.writeFileSync(animPath, JSON.stringify([
+    {
+      __type__: 'cc.AnimationClip', _name: 'position', _objFlags: 0, _native: '',
+      sample: 60, speed: 1, wrapMode: 2, _duration: 1,
+      _tracks: [{ __id__: 1 }], _events: [], _exoticAnimation: null,
+    },
+    {
+      __type__: 'cc.animation.UntypedTrack',
+      _binding: { __type__: 'cc.animation.TrackBinding', path: { __id__: 2 } },
+      _channels: [{ __id__: 3 }],
+    },
+    { __type__: 'cc.animation.TrackPath', _paths: ['position'] },
+    { __type__: 'cc.animation.UntypedTrackChannel', _curve: { __id__: 4 }, property: 'x' },
+    {
+      __type__: 'cc.RealCurve', _times: [0, 1],
+      _values: [
+        { __type__: 'cc.RealKeyframeValue', interpolationMode: 0, value: 0, easingMethod: 0 },
+        { __type__: 'cc.RealKeyframeValue', interpolationMode: 0, value: 100, easingMethod: 0 },
+      ],
+      preExtrapolation: 1, postExtrapolation: 1,
+    },
+  ], null, 2) + '\n', 'utf8');
+
+  try {
+    const result = run(['anim', 'query', animPath, '--selector', 'tree']);
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const data = JSON.parse(result.stdout);
+    assert.equal(data.name, 'position');
+    assert.equal(data.tracks[0].path.property, 'position');
+    assert.equal(data.tracks[0].channels[0].property, 'x');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI set active 非法 value: 非零退出', () => {
   const result = run(['set', FIXTURE, 'touchArea', 'active', 'maybe']);
   assert.notEqual(result.status, 0);

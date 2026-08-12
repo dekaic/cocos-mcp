@@ -1,19 +1,19 @@
 # CC 3.8.x AnimationClip (.anim) 文件结构速查表
 
 > 目标读者：读写 .anim 文件的 AI / 工具开发者。
-> .anim 和 .prefab 都是「JSON 数组 + `__id__` 交叉引用」的同构格式，parse/write 复用 [prefab-schema.md](./prefab-schema.md) 里描述的规则；本文只补 .anim 独有的对象类型与字段。
-> 样本来源：`assets/packages/module/game/merge/effect/component/prefab/Skwjquchuquchu.anim`。
+> .anim 和 .prefab 都是「JSON 数组 + `__id__` 交叉引用」容器，但资产头不同：前者是 `cc.AnimationClip`，不能交给要求 `cc.Prefab.data` 的 Prefab 解析器。
+> 参考样本包括 Creator 3.8 官方 `Easing_Linear.anim` 的 `UntypedTrack + RealCurve`。
 
 ---
 
 ## 1. 整体结构
 
 ```
-objects[0]  = cc.AnimationClip                 ← 文件头（引用 _tracks / _embeddedPlayers / _additiveSettings）
-objects[1..N-3] = Tracks + TrackPaths + Channels + Curves + HierarchyPath/ComponentPath
-objects[N-2]   = cc.AnimationClipAdditiveSettings
-objects[N-1]   = （可选）EmbeddedPlayer / EmbeddedAnimationClipPlayable
+objects[0]    = cc.AnimationClip               ← 文件头（引用 _tracks）
+objects[1..N] = Tracks + TrackPaths + Channels + Curves + 可选路径对象
 ```
+
+`_additiveSettings`、`_embeddedPlayers` 等字段和对象都是可选扩展，并不固定占用数组尾部。
 
 依赖链：
 
@@ -37,6 +37,7 @@ AnimationClip
 | `cc.animation.ObjectTrack` | 1 | **`_channel`**（单数） | — | `spriteFrame`, 资产引用 |
 | `cc.animation.VectorTrack` | 2/3/4 | **`_channels`**（复数数组） | `_nComponents` | `position`, `scale`, `eulerAngles` |
 | `cc.animation.ColorTrack` | 4 | **`_channels`**（复数数组） | — | `color`（r/g/b/a） |
+| `cc.animation.UntypedTrack` | 1..N | **`_channels`**（复数数组） | 每个 `UntypedTrackChannel.property` 命名通道 | Creator 3.8 的 `position.x/y`、`color.r/g/b/a` |
 
 ### ⚠️ 历史踩过的坑
 
@@ -162,52 +163,34 @@ Alpha 通常 FGUI 自己会写 `time=0, value=0`，所以 opacity 轨道天然�
 
 ---
 
-## 7. 用 anim-primitives 构建完整 .anim
+## 7. 通过安全入口创建 .anim
 
-最小示例：给 "n4" 节点 `cc.UIOpacity.opacity` 加一条 `[0→0, 0.1→255, 0.467→0]` 的 CONSTANT 轨道。
+最小示例：创建根节点 `position.x/y` 的循环数值动画。`createAnimationClip` 会先校验全部输入，拒绝覆盖已有文件，并通过相邻临时文件原子落盘。
 
 ```js
-const { parsePrefab, writePrefab, anim, ref } = require('./cli/src');
-const {
-  makeHierarchyPath, makeComponentPath, makeTrackPath,
-  makeRealKeyframe, makeRealCurve, makeChannel, makeRealTrack,
-  makeAdditiveSettings, makeAnimationClip,
-  InterpolationMode, hashString,
-} = anim;
+const { createAnimationClip, queryAnimationClip } = require('./cli/src');
 
-const objects = [];
-objects.push(null);                                              // [0] 占位 AnimationClip
-
-const hierIdx = objects.length; objects.push(makeHierarchyPath('n4'));     // [1]
-const compIdx = objects.length; objects.push(makeComponentPath('cc.UIOpacity')); // [2]
-const pathIdx = objects.length;
-objects.push(makeTrackPath([ref(hierIdx), ref(compIdx), 'opacity']));       // [3]
-
-const curveIdx = objects.length;
-objects.push(makeRealCurve({
-  times: [0, 0.1, 0.4667],
-  values: [
-    makeRealKeyframe({ value: 0,   interpolationMode: InterpolationMode.CONSTANT }),
-    makeRealKeyframe({ value: 255, interpolationMode: InterpolationMode.CONSTANT }),
-    makeRealKeyframe({ value: 0,   interpolationMode: InterpolationMode.CONSTANT }),
-  ],
-}));                                                              // [4]
-
-const chIdx = objects.length; objects.push(makeChannel(curveIdx));          // [5]
-const trackIdx = objects.length; objects.push(makeRealTrack(pathIdx, chIdx)); // [6]
-
-const additiveIdx = objects.length; objects.push(makeAdditiveSettings());   // [7]
-
-objects[0] = makeAnimationClip({
-  name: 'demo',
-  sample: 30,
-  duration: 0.7333,
-  hash: hashString('demo'),
-  trackIndices: [trackIdx],
-  additiveIdx,
+createAnimationClip('/absolute/project/assets/position-loop.anim', {
+  name: 'position-loop',
+  duration: 2,
+  wrapMode: 'loop',
+  tracks: [{
+    property: 'position',
+    channels: [
+      { property: 'x', keyframes: [
+        { time: 0, value: -200, interpolation: 'linear' },
+        { time: 1, value: 200, interpolation: 'linear' },
+        { time: 2, value: -200, interpolation: 'linear' },
+      ] },
+      { property: 'y', keyframes: [
+        { time: 0, value: 0 },
+        { time: 2, value: 0 },
+      ] },
+    ],
+  }],
 });
 
-require('fs').writeFileSync('demo.anim', JSON.stringify(objects, null, 2));
+console.log(queryAnimationClip('/absolute/project/assets/position-loop.anim'));
 ```
 
-**关键点**：`makeRealTrack` 自动生成 `_channel`（单数）字段，保证编辑器能识别；改用 `makeVectorTrack` / `makeColorTrack` 自动生成 `_channels`（复数数组）+ 必要的 `_nComponents`。
+通过 MCP 使用时调用 router 全局 `animation_create` / `animation_query`；新文件随后仍需由目标项目执行 `asset_refresh`，让 Creator 生成 `.meta` 并导入。

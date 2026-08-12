@@ -1,23 +1,21 @@
 // cli/anim-cmd.js — anim 子命令
 //
-// .anim 文件与 prefab 同为 JSON 数组 + __id__ 引用格式，editPrefab 可直接复用。
-// 本子命令是封装：让用户语义上明确"这是动画文件操作"，并允许 query 节点结构。
+// .anim 文件与 prefab 同为 JSON 数组 + __id__ 引用容器，但资产头不同。
+// query 使用 AnimationClip 专用解析器；legacy batch 仍只承载原 prefab op 包装。
 //
 // 用法：
-//   anim query <anim> [--selector tree|node|find|field] ...
+//   anim query <anim> [--selector tree]
 //   anim batch <anim> <ops.json> [--dry-run]
 //
-// 注意：op 库当前面向 cc.Node 树设计，对 .anim 内的 cc.AnimationClip /
-// cc.Track / cc.Curve 等结构无专属 op，但通用的 set-component-field（用于
-// AnimationClip 顶层）/ set-component-ref / dedupe-component 等仍可用。
-// 真正的 anim 曲线编辑应由 src/anim-primitives.js 暴露的 helper 在脚本中处理。
+// 注意：op 库面向 cc.Node 树，不提供 AnimationClip 曲线编辑。
+// 新建数值曲线使用 router 的 animation_create 或 createAnimationClip API。
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const { editPrefab } = require('../editor/index.js');
-const { queryPrefab } = require('../query/index.js');
+const { queryAnimationClip } = require('../animation.js');
 const { parseFlags } = require('./flags.js');
 
 function die(msg) {
@@ -37,12 +35,11 @@ function cmdAnim(args) {
     process.stdout.write(`anim <subcommand> <file> [args]
 
 Subcommands:
-  query <anim> [--selector tree|node|find|field] ...
+  query <anim> [--selector tree]
   batch <anim> <ops.json> [--project-root <path>] [--dry-run]
 
-注意：.anim 与 .prefab 同为 JSON 数组 + __id__ 引用格式，复用 editPrefab。
-op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primitives.js
-暴露的 helper 在脚本中处理。
+query 使用 AnimationClip 专用解析器。batch 是保留的 legacy prefab-op 包装，
+不支持编辑 AnimationClip 曲线；新建数值曲线请用 animation_create。
 `);
     return;
   }
@@ -55,19 +52,13 @@ op 库当前主要面向 cc.Node 树；编辑动画曲线请用 src/anim-primiti
     if (!fs.existsSync(animPath)) die(`anim query: 文件不存在: ${animPath}`);
 
     const selectorType = flags['selector'] || 'tree';
-    const withComps = flags['with-comps'] === true;
-    let selector;
-    if (selectorType === 'tree') selector = { type: 'tree', withComps };
-    else if (selectorType === 'node') selector = { type: 'node', name: flags['name'], withComps };
-    else if (selectorType === 'find') selector = { type: 'find', nodeType: flags['type'] };
-    else if (selectorType === 'field') selector = {
-      type: 'field', name: flags['name'], componentType: flags['comp'], field: flags['field'],
-    };
-    else die(`anim query: 不支持的 --selector "${selectorType}"`);
+    if (selectorType !== 'tree') {
+      die(`anim query: AnimationClip 只支持 --selector tree，收到 "${selectorType}"`);
+    }
 
     let result;
     try {
-      result = queryPrefab(animPath, selector);
+      result = queryAnimationClip(animPath);
     } catch (e) {
       die('anim query 失败: ' + e.message);
     }

@@ -2,7 +2,7 @@
 // CC3 AnimationClip (.anim) 对象构建原语（纯 CJS，零三方依赖）
 //
 // .anim 文件和 .prefab 一样是 JSON 数组 + `__id__` 交叉引用，
-// 复用 parsePrefab / writePrefab 解析写入。
+// 但资产头不同，必须由 animation.js 的 AnimationClip 解析器读写。
 //
 // 但 .anim 内部对象类型（AnimationClip / Track / Curve / Channel）
 // 有自己的 schema 规范，最容易踩的坑：
@@ -11,6 +11,7 @@
 //   ✅ cc.animation.ObjectTrack → 单通道 → `_channel: {__id__: X}`   （单数）
 //   ✅ cc.animation.VectorTrack → 多通道 → `_channels: [x, y, z]`    （复数数组）
 //   ✅ cc.animation.ColorTrack  → 多通道 → `_channels: [r, g, b, a]` （复数数组）
+//   ✅ cc.animation.UntypedTrack → 具名多通道 → `_channels` + channel.property
 //
 // 写错字段名（比如给 RealTrack 写 `_channels: [...]`）会导致 CC3 编辑器
 // 按 schema 验证时直接忽略整条轨道，表现为「anim 文件里有数据但编辑器
@@ -130,6 +131,19 @@ function makeChannel(curveIdx) {
   };
 }
 
+/**
+ * Creator 3.8 UntypedTrack 使用的具名通道。
+ * @param {number} curveIdx
+ * @param {string} property - 复合属性的通道名，如 x / y / r / a
+ */
+function makeUntypedTrackChannel(curveIdx, property) {
+  return {
+    __type__: 'cc.animation.UntypedTrackChannel',
+    _curve: ref(curveIdx),
+    property,
+  };
+}
+
 // ─────────────────────────────────────────────
 // cc.animation.HierarchyPath / ComponentPath / TrackPath
 // 用于定位轨道的目标节点与属性
@@ -155,6 +169,22 @@ function makeComponentPath(component) {
  */
 function makeTrackPath(parts) {
   return { __type__: 'cc.animation.TrackPath', _paths: parts };
+}
+
+/**
+ * Creator 3.8 Animation Editor 生成的通用复合数值轨道。
+ * @param {number} trackPathIdx
+ * @param {number[]} channelIndices
+ */
+function makeUntypedTrack(trackPathIdx, channelIndices) {
+  return {
+    __type__: 'cc.animation.UntypedTrack',
+    _binding: {
+      __type__: 'cc.animation.TrackBinding',
+      path: ref(trackPathIdx),
+    },
+    _channels: channelIndices.map(ref),
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -363,9 +393,11 @@ module.exports = {
   makeRealCurve,
   makeObjectCurve,
   makeChannel,
+  makeUntypedTrackChannel,
   makeHierarchyPath,
   makeComponentPath,
   makeTrackPath,
+  makeUntypedTrack,
   makeRealTrack,
   makeObjectTrack,
   makeVectorTrack,

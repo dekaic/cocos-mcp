@@ -1,4 +1,4 @@
-# cocos-mcp-cli — CC3 Prefab 离线读写工具
+# cocos-mcp-cli — CC3 Prefab / AnimationClip 离线工具
 
 > 单一真相文档。覆盖：定位、命令、op 全表、配方、已知坑、源码导航。
 >
@@ -20,12 +20,12 @@ prefab 是 JSON 数组，`__id__` 是数组下标，字符串替换会破坏所�
 - 增删克隆节点 / 加组件 / 合并重复组件
 - 跨多个 prefab 跑同一组 ops（`--glob`）
 - 比较两个 prefab（`diff` 子命令）
-- 操作 `.anim` 文件（`anim` 子命令，与 prefab 同格式）
+- 查询 `.anim` 文件的 clip / track / channel / keyframe 结构
 
 **不适用 / 已知限制**：
 
 - 多层嵌套 stub（stub 内还有 stub）：CLI 支持 `refSubNode` 字符串数组路径，但更深层场景仍建议走 tools pipeline（`tools/step-3-script/bind-prefab-components.ts`）
-- 改 `.anim` 文件里的 AnimationClip / Track / Curve 结构：用 `cli/src/anim-primitives.js` 在脚本中处理，不通过 op
+- `anim batch` 沿用的 prefab op 不支持 AnimationClip 曲线；新建 RealCurve 数值轨道使用 router 的 `animation_create`
 - 脚本组件本身在 stub 内挂载（`mountedComponents`）的 @property 绑定：CLI 会抛错
 
 ---
@@ -87,7 +87,8 @@ cocos-mcp-cli query <prefab> [--selector tree|node|find|field]
 cocos-mcp-cli set   <prefab> <nodeName> <field> <value>
 cocos-mcp-cli batch <prefab> <ops.json> [--project-root <path>] [--dry-run]
 cocos-mcp-cli batch <ops.json> --glob <pattern> [--project-root <path>] [--dry-run]
-cocos-mcp-cli anim  <subcommand> <file> [args]    # subcommand: query | batch
+cocos-mcp-cli anim query <file> [--selector tree]
+cocos-mcp-cli anim batch <file> <ops.json> [--dry-run] # legacy；不支持曲线
 cocos-mcp-cli diff  <prefabA> <prefabB>            # 字段级 diff，输出与 dry-run 同格式
 cocos-mcp-cli create-prefab <out> [--name N] [--width W] [--height H]
                                   [--add-spine <skel-uuid>] [--dry-run]
@@ -135,12 +136,20 @@ node bin/cocos-mcp-cli.js batch /tmp/ops.json \
 
 ### anim
 
-`.anim` 与 `.prefab` 同为 JSON 数组 + `__id__` 引用格式，复用 `editPrefab`。op 主要面向 cc.Node 树。改 AnimationClip / Track / Curve 结构请用 `cli/src/anim-primitives.js` 在脚本中处理。
+`.anim` 与 `.prefab` 同为 JSON 数组 + `__id__` 引用容器，但资产头分别是 `cc.AnimationClip` 与 `cc.Prefab`，不能套用同一个根校验。`anim query` 使用 AnimationClip 专用解析器并返回标准化轨道、路径、通道和关键帧。
 
 ```bash
 node bin/cocos-mcp-cli.js anim query my.anim --selector tree
-node bin/cocos-mcp-cli.js anim batch my.anim ops.json --dry-run
 ```
+
+Router 还提供两个不依赖编辑器运行的全局 tool：
+
+| tool | 用途 | 关键边界 |
+|---|---|---|
+| `animation_query` | 与 `anim query` 相同的结构化回读 | `filePath` 必须是绝对路径 |
+| `animation_create` | 新建 `UntypedTrack + RealCurve` 数值曲线 clip | 父目录必须存在；已有目标拒绝覆盖 |
+
+`animation_create.clip` 包含 `name`、`duration`、可选的 `sample/speed/wrapMode`，以及 `tracks[].property/channels[].property/keyframes[]`。关键帧时间必须严格递增且位于 `[0, duration]`。本轮不支持 ObjectCurve、Quat、事件或 EmbeddedPlayer。
 
 ### diff
 
@@ -424,7 +433,8 @@ stub 节点（嵌套 prefab 实例）在 prefab JSON 里 `_name = ""`（空字�
 | 合并重复组件 | `dedupe-component` |
 | 跨多 prefab 跑同一组 ops | `batch --glob` |
 | 比较两个 prefab | `diff` 子命令 |
-| 操作 .anim 文件 | `anim query` / `anim batch` |
+| 查询 .anim 文件 | `anim query` 或 `animation_query` |
+| 新建数值曲线 .anim | `animation_create` |
 
 ---
 
@@ -772,6 +782,7 @@ extensions/cocos-mcp/cli/
     ├── classid-resolver.js      # @ccclass 名 → 压缩 classId（扫 assets/scripts/*.ts.meta）
     ├── uuid-resolver.js         # uuid → 磁盘路径（扫 assets/**/*.prefab）
     ├── anim-primitives.js       # .anim 文件构造原语
+    ├── animation.js             # AnimationClip 解析、标准化查询与安全创建
     │
     ├── editor/                  # editPrefab 主入口 + op handler
     │   ├── index.js             # editPrefab + OP_HANDLERS 注册表

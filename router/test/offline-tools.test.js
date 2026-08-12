@@ -67,18 +67,22 @@ function makeTmp(tag) {
 
 // ── OFFLINE_TOOLS 定义完整性 ────────────────────────────────────
 
-test('OFFLINE_TOOLS 导出 3 个 tool，名称正确', () => {
-    assert.equal(OFFLINE_TOOLS.length, 3);
+test('OFFLINE_TOOLS 导出 prefab 与 animation tool，名称正确', () => {
+    assert.equal(OFFLINE_TOOLS.length, 5);
     var names = OFFLINE_TOOLS.map(function (t) { return t.name; });
     assert.ok(names.includes('prefab_query'));
     assert.ok(names.includes('prefab_edit'));
     assert.ok(names.includes('prefab_batch'));
+    assert.ok(names.includes('animation_query'));
+    assert.ok(names.includes('animation_create'));
 });
 
 test('isOfflineTool 对已知 name 返回 true，未知 name 返回 false', () => {
     assert.equal(isOfflineTool('prefab_query'), true);
     assert.equal(isOfflineTool('prefab_edit'), true);
     assert.equal(isOfflineTool('prefab_batch'), true);
+    assert.equal(isOfflineTool('animation_query'), true);
+    assert.equal(isOfflineTool('animation_create'), true);
     assert.equal(isOfflineTool('router_list_editors'), false);
     assert.equal(isOfflineTool('scene_set_property'), false);
     assert.equal(isOfflineTool(''), false);
@@ -108,6 +112,80 @@ test('prefab_edit schema only requires op because not every op uses node', () =>
     assert.deepEqual(tool.inputSchema.properties.ops.items.required, ['op']);
     assert.match(tool.description, /set-nested-node-field/);
     assert.match(tool.description, /add-nested-prefab/);
+});
+
+test('animation tools expose the approved absolute-path query/create schema', () => {
+    var query = OFFLINE_TOOLS.find(function (item) { return item.name === 'animation_query'; });
+    var create = OFFLINE_TOOLS.find(function (item) { return item.name === 'animation_create'; });
+
+    assert.deepEqual(query.inputSchema.required, ['filePath']);
+    assert.deepEqual(create.inputSchema.required, ['filePath', 'clip']);
+    assert.deepEqual(
+        create.inputSchema.properties.clip.properties.wrapMode.enum,
+        ['normal', 'loop', 'ping-pong', 'ping-pong-loop']
+    );
+    assert.deepEqual(
+        create.inputSchema.properties.clip.properties.tracks.items.required,
+        ['property', 'channels']
+    );
+});
+
+function makeAnimationSpec() {
+    return {
+        name: 'router-position-loop',
+        duration: 1,
+        wrapMode: 'loop',
+        tracks: [{
+            property: 'position',
+            channels: [{
+                property: 'x',
+                keyframes: [
+                    { time: 0, value: -200, interpolation: 'linear' },
+                    { time: 1, value: 200, interpolation: 'linear' },
+                ],
+            }],
+        }],
+    };
+}
+
+test('animation_create + animation_query 完成结构 roundtrip', async () => {
+    var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-animation-'));
+    var filePath = path.join(dir, 'router-position-loop.anim');
+    try {
+        var created = await handleOfflineToolCall('animation_create', {
+            filePath: filePath,
+            clip: makeAnimationSpec(),
+        });
+        var createData = JSON.parse(created.content[0].text);
+        assert.equal(createData.created, true);
+        assert.equal(createData.clip.name, 'router-position-loop');
+
+        var queried = await handleOfflineToolCall('animation_query', { filePath: filePath });
+        var queryData = JSON.parse(queried.content[0].text);
+        assert.equal(queryData.tracks[0].channels[0].curveType, 'cc.RealCurve');
+        assert.deepEqual(
+            queryData.tracks[0].channels[0].keyframes.map(function (keyframe) { return keyframe.value; }),
+            [-200, 200]
+        );
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('animation tools reject relative filePath', async () => {
+    await assert.rejects(
+        function () { return handleOfflineToolCall('animation_query', { filePath: 'relative.anim' }); },
+        /必须是绝对路径/
+    );
+    await assert.rejects(
+        function () {
+            return handleOfflineToolCall('animation_create', {
+                filePath: 'relative.anim',
+                clip: makeAnimationSpec(),
+            });
+        },
+        /必须是绝对路径/
+    );
 });
 
 // ── requireAbsolutePath ────────────────────────────────────────

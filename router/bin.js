@@ -34,7 +34,7 @@ var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
 var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
 var DISCOVERY_INTERVAL_MS = 15 * 1000;
 var PROTOCOL_VERSION = '2024-11-05';
-var ROUTER_INFO = { name: 'cocos-mcp-router', version: '1.0.0' };
+var ROUTER_INFO = { name: 'cocos-mcp-router', version: '2.0.0' };
 
 function logErr() {
     // router 走 stdio，不能往 stdout 写非 JSON-RPC 内容，日志只能走 stderr

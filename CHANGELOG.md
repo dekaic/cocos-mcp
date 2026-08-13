@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-13
+
 ### Added
 
 - 发布 bound runtime、tool schema 与加载时间 identity，支持核对编辑器实际加载版本。

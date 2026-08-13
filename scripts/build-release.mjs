@@ -66,11 +66,50 @@ function sha256(filePath) {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-function readPackageAtCommit(root, commit) {
-    const raw = git(root, ['show', commit + ':package.json']);
-    const value = JSON.parse(raw);
-    assert.equal(value.name, 'cocos-mcp', 'HEAD package.json is not cocos-mcp');
-    return value;
+function readFileAtCommit(root, commit, file) {
+    return git(root, ['show', commit + ':' + file]);
+}
+
+function extractVersion(source, pattern, surface) {
+    const match = source.match(pattern);
+    assert.ok(match, 'cannot find product version in ' + surface);
+    return match[1];
+}
+
+function readProductAtCommit(root, commit) {
+    const packageJson = JSON.parse(readFileAtCommit(root, commit, 'package.json'));
+    const cliPackageJson = JSON.parse(readFileAtCommit(root, commit, 'cli/package.json'));
+    assert.equal(packageJson.name, 'cocos-mcp', 'HEAD package.json is not cocos-mcp');
+    assert.equal(cliPackageJson.name, 'cocos-mcp-cli', 'HEAD cli/package.json is not cocos-mcp-cli');
+
+    const versions = [
+        ['package.json', packageJson.version],
+        ['cli/package.json', cliPackageJson.version],
+        [
+            'main.js serverInfo',
+            extractVersion(
+                readFileAtCommit(root, commit, 'main.js'),
+                /name:\s*['"]cocos-mcp['"]\s*,\s*version:\s*['"]([^'"]+)['"]/,
+                'main.js serverInfo'
+            ),
+        ],
+        [
+            'router/bin.js ROUTER_INFO',
+            extractVersion(
+                readFileAtCommit(root, commit, 'router/bin.js'),
+                /ROUTER_INFO\s*=\s*\{\s*name:\s*['"]cocos-mcp-router['"]\s*,\s*version:\s*['"]([^'"]+)['"]/,
+                'router/bin.js ROUTER_INFO'
+            ),
+        ],
+    ];
+    versions.forEach(([surface, version]) => {
+        assert.match(version, PRODUCT_VERSION_RE, surface + ' version is not an allowed SemVer');
+    });
+    const versionDetails = versions.map(([surface, version]) => surface + '=' + version).join(', ');
+    versions.slice(1).forEach(([, version]) => {
+        assert.equal(version, packageJson.version, 'product version surfaces differ: ' + versionDetails);
+    });
+    return packageJson;
 }
 
 function assertArchiveContract(artifactPath, version) {
@@ -105,8 +144,7 @@ export function buildRelease(options = {}) {
     const productWorktreeClean = git(root, ['status', '--porcelain=v1', '--untracked-files=all']) === '';
     const sdkWorktreeClean = git(sdkDir, ['status', '--porcelain=v1', '--untracked-files=all']) === '';
     const sdkMatchesPinned = sdkCheckoutCommit === sdkPinnedCommit;
-    const packageJson = readPackageAtCommit(root, head);
-    assert.match(packageJson.version, PRODUCT_VERSION_RE, 'package version is not an allowed SemVer');
+    const packageJson = readProductAtCommit(root, head);
     const versionTagCommit = resolveVersionTagCommit(root, packageJson.version);
     const versionTagConflict = versionTagCommit !== '' && versionTagCommit !== head;
     const releaseEligible = productWorktreeClean && sdkWorktreeClean && sdkMatchesPinned && !versionTagConflict;

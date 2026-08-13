@@ -83,3 +83,26 @@ test('buildRelease blocks a clean HEAD when its version tag points elsewhere', (
     assert.equal(result.manifest.releaseEligible, false);
     assert.match(path.basename(result.artifactPath), /-candidate\.[0-9a-f]{7}\.zip$/);
 });
+
+test('buildRelease rejects mismatched product version surfaces', (t) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-version-mismatch-test-'));
+    t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+    const productRoot = cloneCleanProduct(tempRoot);
+    const packagePath = path.join(productRoot, 'package.json');
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    packageJson.version = '9.9.9';
+    fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n');
+    run('git', ['-C', productRoot, 'add', 'package.json']);
+    run('git', [
+        '-C', productRoot,
+        '-c', 'user.name=Cocos MCP Test',
+        '-c', 'user.email=cocos-mcp-test@example.invalid',
+        'commit', '--quiet', '-m', 'test: create version mismatch',
+    ]);
+
+    assert.throws(
+        () => buildRelease({ root: productRoot, outputDir: path.join(tempRoot, 'output') }),
+        /product version surfaces differ: package\.json=9\.9\.9, cli\/package\.json=1\.0\.0, main\.js serverInfo=1\.0\.0, router\/bin\.js ROUTER_INFO=1\.0\.0/
+    );
+});

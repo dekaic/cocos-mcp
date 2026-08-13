@@ -6,7 +6,7 @@
 
 一次正式发布必须同时具备：
 
-1. `package.json.version` 与目标 SemVer 一致；
+1. 四个产品版本面与目标 SemVer 一致；
 2. 一个不可变的 `cocos-mcp` release commit；
 3. 固定且已嵌入制品的 `mcp-sdk` commit；
 4. 从该 release commit 构建的自包含 ZIP、manifest 与 SHA-256；
@@ -32,6 +32,17 @@
 预发布 tag 使用 `v<version>-rc.<n>`。产品版本与 tag 不使用 `+build` metadata；准确 build identity 由 release commit、manifest 和 runtime/schema hash 表达。实验分支和历史 `*-test.*` tag 不作为稳定版本线，也不得覆盖或改写。
 
 `package_version` 是 Cocos Creator 扩展 manifest 格式版本，不是 `cocos-mcp` 产品版本。
+
+产品版本同时出现在以下四处，发布时必须保持完全一致：
+
+| 版本面 | 位置 |
+|---|---|
+| Creator 扩展 | `package.json.version` |
+| offline CLI | `cli/package.json.version` |
+| 项目 MCP server identity | `main.js` 的 server info |
+| stdio router identity | `router/bin.js` 的 `ROUTER_INFO` |
+
+`scripts/build-release.mjs` 从待构建的准确 commit 读取并校验四个版本面；任一缺失、不是允许的 SemVer 或彼此不一致时，构建直接失败。
 
 ## 3. 分支与不可变性
 
@@ -75,7 +86,7 @@ node scripts/build-release.mjs
 按顺序执行，后一步不能补偿前一步失败：
 
 1. 冻结范围，确认 `CHANGELOG.md` 的 `[Unreleased]` 只包含目标版本内容。
-2. 修改 `package.json.version`，将变更移动到正式版本标题；取得 product commit 授权后形成待验证 release commit。
+2. 同步修改第 2 节列出的四个产品版本面，将变更移动到正式版本标题；取得 product commit 授权后形成待验证 release commit。
 3. 确认 `cocos-mcp` 与 `mcp-sdk` clean、SDK checkout 与父仓库 gitlink 一致，并确认本地目标版本 tag 不存在或已指向同一 release commit。
 4. 运行插件和 SDK 自动测试。
 5. 从两个 Creator 都未运行且相关工程 clean 的状态运行 Lab 双编辑器回归。

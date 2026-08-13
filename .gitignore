@@ -4,6 +4,7 @@ node_modules/
 # 临时与本机产物
 .dev/
 .DS_Store
+/dist/
 *.log
 *.bak
 *.bak.*

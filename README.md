@@ -6,8 +6,9 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab / AnimationClip 工具�
 
 ## 版本状态
 
-- `main` / `stable/v1.0`：稳定版 `v1.0.0`
-- `test/v2.1` / `test/v3.0/mcp-architecture`：测试版本，不作为稳定发布使用
+- 现有稳定 tag：`v1.0.0`；它早于当前正式制品规范，GitHub Releases 尚无对应的自包含发布。`stable/v1.0` 仅作为 1.0 维护分支。
+- `main`：下一版本的未发布开发线；公开能力变化见 [`CHANGELOG.md`](./CHANGELOG.md)。
+- 历史 `test/*` 分支和 `*-test.*` tag 只保留实验记录，不作为稳定发布使用。
 
 ---
 
@@ -15,6 +16,8 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab / AnimationClip 工具�
 
 | 文档 | 内容 | 阅读时机 |
 |---|---|---|
+| [`CHANGELOG.md`](./CHANGELOG.md) | 已发布和未发布的用户可见变化 | 判断升级影响时 |
+| [`RELEASING.md`](./RELEASING.md) | SemVer、制品、验证、tag 与发布规范 | 准备正式版本时 |
 | [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：多项目 MCP 绑定、HTTP fallback、预览 URL、CLI/MCP 分工 | agent 使用本插件前 |
 | [`QUICK-REF.md`](./QUICK-REF.md) | **一页速查表**：节点定位三式、场景 → op 对照、ops.json 速记、踩坑表 | agent 起手第一份，挑不到再翻 cli.md |
 | [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、26 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
@@ -227,6 +230,8 @@ direct HTTP 与 router 都会在调用 handler 或转发前检查 schema 顶层 
 > ```bash
 > git submodule update --init --recursive
 > ```
+
+正式 GitHub Release 应提供已嵌入 SDK 的自包含 ZIP、manifest 与 SHA-256；从源码分支或 GitHub source archive 安装时仍必须按上面步骤初始化 submodule。制品与校验规则见 [`RELEASING.md`](./RELEASING.md)。
 
 ```bash
 claude mcp add cocos -- node /path/to/cocos-mcp/router/bin.js

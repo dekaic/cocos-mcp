@@ -91,6 +91,7 @@ test('buildRelease rejects mismatched product version surfaces', (t) => {
     const productRoot = cloneCleanProduct(tempRoot);
     const packagePath = path.join(productRoot, 'package.json');
     const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const originalVersion = packageJson.version;
     packageJson.version = '9.9.9';
     fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n');
     run('git', ['-C', productRoot, 'add', 'package.json']);
@@ -101,8 +102,14 @@ test('buildRelease rejects mismatched product version surfaces', (t) => {
         'commit', '--quiet', '-m', 'test: create version mismatch',
     ]);
 
+    const expectedMessage = 'product version surfaces differ: package.json=9.9.9, ' +
+        'cli/package.json=' + originalVersion + ', main.js serverInfo=' + originalVersion +
+        ', router/bin.js ROUTER_INFO=' + originalVersion;
     assert.throws(
         () => buildRelease({ root: productRoot, outputDir: path.join(tempRoot, 'output') }),
-        /product version surfaces differ: package\.json=9\.9\.9, cli\/package\.json=1\.0\.0, main\.js serverInfo=1\.0\.0, router\/bin\.js ROUTER_INFO=1\.0\.0/
+        (error) => {
+            assert.equal(String(error.message).split('\n')[0], expectedMessage);
+            return true;
+        }
     );
 });

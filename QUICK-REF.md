@@ -41,6 +41,7 @@ node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 改 _lpos（绝对值 x/y/z） | `set-position` |
 | 改 _lpos（相对偏移 dx/dy/dz） | `adjust-position` |
 | 改 _color（r/g/b/a，0-255） | `set-node-color` |
+| 改 stub 展开后的内部节点字段 | `set-nested-node-field`（`node` 是外层 stub，`subNode` 定位内部节点） |
 | 调子节点顺序 | `reorder-children`（order 必须含全部子节点） |
 | 把节点搬到另一个父节点下 | `reparent`（node + parent + index?；不复制；普通 inline 节点；自带循环检测）|
 

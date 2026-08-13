@@ -791,7 +791,7 @@ extensions/cocos-mcp/cli/
     │   ├── id-utils.js          # fileId 分配 / 子树断开 / __id__ 重映射
     │   ├── diff.js              # 字段级 diff（dry-run + diff 子命令共用）
     │   ├── op-schema.js         # ops 跑前 schema 校验
-    │   └── ops/                 # 26 个 op handler，一文件一个
+    │   └── ops/                 # 35 个 op handler，一文件一个
     │
     ├── query/                   # 只读查询
     │   ├── index.js / tree.js / node.js / find.js / field.js

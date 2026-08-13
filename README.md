@@ -20,7 +20,7 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab / AnimationClip 工具�
 | [`RELEASING.md`](./RELEASING.md) | SemVer、制品、验证、tag 与发布规范 | 准备正式版本时 |
 | [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：多项目 MCP 绑定、HTTP fallback、预览 URL、CLI/MCP 分工 | agent 使用本插件前 |
 | [`QUICK-REF.md`](./QUICK-REF.md) | **一页速查表**：节点定位三式、场景 → op 对照、ops.json 速记、踩坑表 | agent 起手第一份，挑不到再翻 cli.md |
-| [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、26 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
+| [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、35 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
 | [`doc/prefab-schema.md`](./doc/prefab-schema.md) | CC3 prefab JSON 结构速查（节点 / 组件 / 引用字段格式） | 看不懂 prefab 字段时查 |
 | [`doc/nested-prefab-protocol.md`](./doc/nested-prefab-protocol.md) | `cc.TargetOverrideInfo` 协议（跨 nested @property 挂载） | 调试 set-component-ref 跨 stub 失败时 |
 | [`doc/prefab-direct-edit.md`](./doc/prefab-direct-edit.md) | offline CLI vs 编辑器路径决策表 | 不确定该用 CLI 还是 scene_set_property 时 |
@@ -181,6 +181,8 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `prefab_query` | 查询 tree、node、find、field 或 overrides；tree/node 支持 `withComps` |
 | `prefab_edit` | 声明式批量编辑 prefab，所有 op 成功后一次性落盘 |
 | `prefab_batch` | 从 JSON 文件读取 ops 后批量编辑 prefab |
+| `animation_query` | 查询 AnimationClip 的标准化轨道、通道与关键帧结构 |
+| `animation_create` | 创建 `UntypedTrack + RealCurve` 数值曲线 AnimationClip；拒绝覆盖已有文件 |
 
 完整 op 列表与配方见 [`doc/cli.md`](./doc/cli.md)。
 
@@ -237,7 +239,7 @@ direct HTTP 与 router 都会在调用 handler 或转发前检查 schema 顶层 
 claude mcp add cocos -- node /path/to/cocos-mcp/router/bin.js
 ```
 
-接入后 Claude Code 即可调用所有活跃编辑器的 tool，以及全局 offline prefab tools。
+接入后 Claude Code 即可调用所有活跃编辑器的 tool，以及全局 offline prefab 与 AnimationClip tools。
 
 ---
 

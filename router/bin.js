@@ -7,7 +7,7 @@
  * stdio MCP server，聚合所有活跃的 Cocos 编辑器扩展，给客户端暴露统一的 tool 列表。
  *
  * 发现机制：
- *   扫 ~/.cocos-mcp/editors/*.json，每个文件代表一个活跃扩展实例
+ *   扫 ~/.cocos-mcp/editors/<pid>.json，每个文件代表一个活跃扩展实例
  *   过滤 mtime > 120s 的（视为已死）
  *   对每个活跃编辑器调 HTTP POST /mcp initialize + tools/list，拿到其 tool 清单
  *
@@ -54,7 +54,7 @@ function scanRegistry() {
         var files = fs.readdirSync(REGISTRY_DIR);
         var now = Date.now();
         files.forEach(function (name) {
-            if (!name.endsWith('.json')) return;
+            if (!/^\d+\.json$/.test(name)) return;
             var full = path.join(REGISTRY_DIR, name);
             try {
                 var st = fs.statSync(full);

@@ -79,7 +79,7 @@ test('router rejects missing editor-tool arguments before forwarding', async () 
     var home = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-router-home-'));
     var registry = path.join(home, '.cocos-mcp', 'editors');
     fs.mkdirSync(registry, { recursive: true });
-    fs.writeFileSync(path.join(registry, 'fixture.json'), JSON.stringify({
+    fs.writeFileSync(path.join(registry, process.pid + '.json'), JSON.stringify({
         pid: process.pid,
         projectPath: '/tmp/router-validation-project',
         projectShortName: 'fixture',
@@ -115,6 +115,49 @@ test('router rejects missing editor-tool arguments before forwarding', async () 
         child.kill('SIGTERM');
         await new Promise(function (resolve) { child.once('exit', resolve); });
         await new Promise(function (resolve) { editor.close(resolve); });
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+});
+
+test('router stale cleanup preserves spawn locks', async () => {
+    var home = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-router-home-'));
+    var registry = path.join(home, '.cocos-mcp', 'editors');
+    fs.mkdirSync(registry, { recursive: true });
+
+    var staleEditor = path.join(registry, '99999999.json');
+    var spawnLock = path.join(registry, 'spawn-lock-fixture-deadbeef00.json');
+    fs.writeFileSync(staleEditor, JSON.stringify({ pid: 99999999 }));
+    fs.writeFileSync(spawnLock, JSON.stringify({
+        pid: process.pid,
+        projectPath: '/tmp/router-validation-project',
+        at: Date.now(),
+    }));
+    var staleTime = new Date(Date.now() - 5 * 60 * 1000);
+    fs.utimesSync(staleEditor, staleTime, staleTime);
+    fs.utimesSync(spawnLock, staleTime, staleTime);
+
+    var child = cp.spawn(process.execPath, [path.resolve(__dirname, '../bin.js')], {
+        env: Object.assign({}, process.env, { HOME: home }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    try {
+        var id = 82;
+        var responsePromise = waitForResponse(child, id);
+        child.stdin.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: id,
+            method: 'initialize',
+            params: {},
+        }) + '\n');
+
+        var response = await responsePromise;
+        assert.equal(response.error, undefined);
+        assert.equal(fs.existsSync(staleEditor), false);
+        assert.equal(fs.existsSync(spawnLock), true);
+    } finally {
+        child.kill('SIGTERM');
+        await new Promise(function (resolve) { child.once('exit', resolve); });
         fs.rmSync(home, { recursive: true, force: true });
     }
 });

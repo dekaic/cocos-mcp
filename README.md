@@ -124,6 +124,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `scene_query_node_tree` | 查询当前场景节点树；传 uuid 查子树 |
 | `scene_query_node` | 查询单节点完整 dump（含所有组件属性） |
 | `scene_add_node` | 在指定父节点下创建场景节点 |
+| `scene_instantiate_prefab` | 通过 Prefab 资源 UUID 在指定父节点下创建实例，并保留 Prefab 关联 |
 | `scene_clone_node` | 复制场景节点树到指定父节点下 |
 | `scene_reparent_node` | 调整场景节点父级 |
 | `scene_remove_node` | 删除场景节点及其子树 |

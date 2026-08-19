@@ -63,6 +63,33 @@ exports.methods = {
         return { uuid: node.uuid, name: node.name, parentUuid: parent.uuid };
     },
 
+    async instantiatePrefab(options) {
+        if (!options || !options.parentUuid || !options.prefabUuid) {
+            throw new Error('parentUuid and prefabUuid are required');
+        }
+
+        var parent = requireNode(options.parentUuid, 'parent');
+        var prefab = await new Promise(function (resolve, reject) {
+            cc.assetManager.loadAny(options.prefabUuid, function (error, asset) {
+                if (error) {
+                    reject(new Error('failed to load prefab ' + options.prefabUuid + ': ' + error.message));
+                    return;
+                }
+                resolve(asset);
+            });
+        });
+        if (!(prefab instanceof cc.Prefab)) {
+            throw new Error('asset is not a cc.Prefab: ' + options.prefabUuid);
+        }
+
+        var node = cc.instantiate(prefab);
+        node.setParent(parent);
+        if (options.position) {
+            node.setPosition(options.position.x || 0, options.position.y || 0, options.position.z || 0);
+        }
+        return { uuid: node.uuid, name: node.name, parentUuid: parent.uuid };
+    },
+
     cloneNode(options) {
         if (!options || !options.sourceUuid || !options.parentUuid) {
             throw new Error('sourceUuid and parentUuid are required');

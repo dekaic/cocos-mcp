@@ -13,7 +13,7 @@ function defineTools(ctx) {
     // execute-scene-script runs inside the Scene process and bypasses the
     // Inspector's normal undo/dirty path. Wrap structural edits in an editor
     // recording so they are persisted by scene_save_scene and can be undone.
-    async function runSceneMutation(method, args, recordUuids) {
+    async function runSceneMutation(method, args, recordUuids, afterExecute) {
         var undoId = await msg('scene', 'begin-recording', recordUuids);
         try {
             var result = await msg('scene', 'execute-scene-script', {
@@ -21,6 +21,7 @@ function defineTools(ctx) {
                 method: method,
                 args: [args],
             });
+            if (afterExecute) await afterExecute(result);
             await msg('scene', 'end-recording', undoId);
             return result;
         } catch (error) {
@@ -76,6 +77,43 @@ function defineTools(ctx) {
             },
             handler: async function (args) {
                 return await runSceneMutation('addNode', args, [args.parentUuid]);
+            },
+        },
+        {
+            name: 'scene_instantiate_prefab',
+            description: '通过 Prefab 资源 uuid 在指定父节点下创建实例，并保留 Prefab 关联。',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    parentUuid: { type: 'string', description: '目标父节点 uuid' },
+                    prefabUuid: { type: 'string', description: 'Prefab 资源 uuid' },
+                    name: { type: 'string', description: '可选：实例名称' },
+                    position: {
+                        type: 'object',
+                        properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } },
+                    },
+                    active: { type: 'boolean' },
+                },
+                required: ['parentUuid', 'prefabUuid'],
+            },
+            handler: async function (args) {
+                return await runSceneMutation('instantiatePrefab', args, [args.parentUuid], async function (result) {
+                    if (typeof args.name === 'string' && args.name) {
+                        await msg('scene', 'set-property', {
+                            uuid: result.uuid,
+                            path: 'name',
+                            dump: { type: 'String', value: args.name },
+                        });
+                        result.name = args.name;
+                    }
+                    if (typeof args.active === 'boolean') {
+                        await msg('scene', 'set-property', {
+                            uuid: result.uuid,
+                            path: 'active',
+                            dump: { type: 'Boolean', value: args.active },
+                        });
+                    }
+                });
             },
         },
         {

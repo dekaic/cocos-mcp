@@ -136,7 +136,7 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 | 查 AssetDB 资源信息 | `asset_query_assets` / `asset_query_info` |
 | 重导资源 | `asset_reimport` |
 | 查场景运行态节点 | `scene_query_node_tree` / `scene_query_node` |
-| 调组件方法或改运行态属性 | `scene_execute_component_method` / `scene_set_property` |
+| 通过组件 UUID 调方法或改运行态属性 | `scene_execute_component_method` / `scene_set_property` |
 | 拿预览 URL | `preview_query_url` |
 | 刷新预览 | `preview_refresh_and_reload` |
 
@@ -145,6 +145,8 @@ offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefa
 `asset_query_assets` 可传 `offset`、`limit` 和 `fields` 控制响应；为兼容既有调用，省略分页参数仍返回全部匹配项。大工程应主动传 `limit` 和字段投影。
 
 direct HTTP server 与 router 都会在 handler/转发前检查 tool schema 顶层 `required` 字段；这不等于完整 JSON Schema 校验，selector 条件等仍由具体 tool 实现验证。
+
+`scene_execute_component_method.uuid` 使用 `scene_query_node` 组件 dump 中的 UUID，不使用节点 UUID；不存在的组件、方法或非数组 `args` 必须按 tool error 处理，不能把 `(ok)` 当作执行证据。
 
 结构化资源文件优先走 CLI 或 MCP tool。纯文本说明文档才直接编辑。
 

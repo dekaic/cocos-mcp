@@ -134,9 +134,11 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `scene_open_scene` | 打开场景（传场景资源 uuid） |
 | `scene_save_scene` | 保存当前场景 |
 | `scene_soft_reload` | 软重载场景，不清编辑器状态 |
-| `scene_execute_component_method` | 调用指定节点的组件方法 |
+| `scene_execute_component_method` | 通过组件 UUID 调用组件方法；无效组件、方法或 args 会返回错误 |
 
 > 修改 prefab 资源文件属性建议用 `prefab_edit`（offline），`scene_set_property` 只适用于运行时节点或需要编辑器上下文的情况。
+>
+> `scene_execute_component_method.uuid` 必须使用 `scene_query_node` 返回的组件 dump 中的 UUID，不是节点 UUID。
 
 ### asset-db 域（需编辑器运行）
 

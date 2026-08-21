@@ -27,6 +27,39 @@ function requireNode(uuid, label) {
     return node;
 }
 
+function findComponent(uuid) {
+    if (!uuid) return null;
+
+    var scene = cc.director.getScene();
+    if (!scene) return null;
+
+    var queue = [scene];
+    while (queue.length > 0) {
+        var node = queue.shift();
+        var components = node.components || [];
+        for (var i = 0; i < components.length; i++) {
+            if (components[i] && components[i].uuid === uuid) return components[i];
+        }
+        Array.prototype.push.apply(queue, node.children || []);
+    }
+    return null;
+}
+
+function requireComponent(uuid) {
+    var component = findComponent(uuid);
+    if (!component) throw new Error('component not found: ' + uuid);
+    return component;
+}
+
+function requireComponentMethod(component, name) {
+    if (typeof name !== 'string' || !name) {
+        throw new Error('method name must be a non-empty string');
+    }
+    var method = component[name];
+    if (typeof method !== 'function') throw new Error('method not found: ' + name);
+    return method;
+}
+
 function applyNodeOptions(node, options) {
     if (options.position) {
         node.setPosition(options.position.x || 0, options.position.y || 0, options.position.z || 0);
@@ -46,6 +79,19 @@ function describeNodeTree(node) {
 }
 
 exports.methods = {
+    validateComponentMethod(options) {
+        if (!options || typeof options.uuid !== 'string' || !options.uuid) {
+            throw new Error('component uuid must be a non-empty string');
+        }
+        if (options.args !== undefined && !Array.isArray(options.args)) {
+            throw new Error('args must be an array');
+        }
+
+        var component = requireComponent(options.uuid);
+        requireComponentMethod(component, options.name);
+        return { uuid: options.uuid, name: options.name };
+    },
+
     queryNodeTree(uuid) {
         var scene = cc.director.getScene();
         if (!scene) throw new Error('scene is not loaded');

@@ -1,5 +1,7 @@
 'use strict';
 
+const Module = require('node:module');
+const path = require('node:path');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { defineTools } = require('./tools.js');
@@ -14,6 +16,29 @@ function createTools(calls) {
     });
 }
 
+function loadSceneMethods(scene) {
+    const filename = path.resolve(__dirname, '../scene/index.js');
+    const originalLoad = Module._load;
+    const originalEditor = global.Editor;
+
+    global.Editor = { App: { path: '/tmp/cocos-creator' } };
+    Module._load = function (request) {
+        if (request === 'cc') {
+            return { director: { getScene: function () { return scene; } } };
+        }
+        return originalLoad.apply(this, arguments);
+    };
+    delete require.cache[filename];
+
+    try {
+        return require(filename).methods;
+    } finally {
+        Module._load = originalLoad;
+        global.Editor = originalEditor;
+        delete require.cache[filename];
+    }
+}
+
 test('scene_query_node_tree reads through the cocos-mcp scene script', async () => {
     const calls = [];
     const tool = createTools(calls).find((item) => item.name === 'scene_query_node_tree');
@@ -24,6 +49,62 @@ test('scene_query_node_tree reads through the cocos-mcp scene script', async () 
         'execute-scene-script',
         { name: 'cocos-mcp', method: 'queryNodeTree', args: ['node'] },
     ]]);
+});
+
+test('scene_execute_component_method validates before using the Creator scene message', async () => {
+    const calls = [];
+    const tool = createTools(calls).find((item) => item.name === 'scene_execute_component_method');
+    const args = { uuid: 'component', name: 'runProbe', args: ['value'] };
+
+    assert.equal(await tool.handler(args), 'ok');
+    assert.equal(tool.inputSchema.properties.uuid.description, '组件 UUID（从 scene_query_node 的组件 dump 中取得）');
+    assert.deepEqual(calls, [
+        ['scene', 'execute-scene-script', {
+            name: 'cocos-mcp',
+            method: 'validateComponentMethod',
+            args: [args],
+        }],
+        ['scene', 'execute-component-method', args],
+    ]);
+});
+
+test('scene component method validation fails closed without invoking the method', () => {
+    let callCount = 0;
+    const component = {
+        uuid: 'component',
+        runProbe: function () { callCount += 1; },
+    };
+    const node = { uuid: 'node', components: [component], children: [] };
+    const scene = { uuid: 'scene', components: [], children: [node] };
+    const methods = loadSceneMethods(scene);
+
+    assert.deepEqual(methods.validateComponentMethod({
+        uuid: 'component',
+        name: 'runProbe',
+        args: [],
+    }), { uuid: 'component', name: 'runProbe' });
+    assert.equal(callCount, 0, 'validation must not invoke the component method');
+
+    assert.throws(
+        () => methods.validateComponentMethod({ uuid: 'node', name: 'runProbe', args: [] }),
+        /component not found: node/,
+    );
+    assert.throws(
+        () => methods.validateComponentMethod({ uuid: 'missing', name: 'runProbe', args: [] }),
+        /component not found: missing/,
+    );
+    assert.throws(
+        () => methods.validateComponentMethod({ uuid: 'component', name: 'missing', args: [] }),
+        /method not found: missing/,
+    );
+    assert.throws(
+        () => methods.validateComponentMethod({
+            uuid: 'component',
+            name: 'runProbe',
+            args: 'not-an-array',
+        }),
+        /args must be an array/,
+    );
 });
 
 test('scene_instantiate_prefab exposes the minimal prefab instance schema', () => {

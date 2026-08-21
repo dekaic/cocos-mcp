@@ -251,22 +251,28 @@ function defineTools(ctx) {
         },
         {
             name: 'scene_execute_component_method',
-            description: '调用指定节点组件上的方法',
+            description: '调用指定组件 UUID 对应组件上的方法',
             inputSchema: {
                 type: 'object',
                 properties: {
-                    uuid: { type: 'string' },
+                    uuid: { type: 'string', description: '组件 UUID（从 scene_query_node 的组件 dump 中取得）' },
                     name: { type: 'string', description: '方法名' },
                     args: { type: 'array', items: {} },
                 },
                 required: ['uuid', 'name'],
             },
             handler: async function (args) {
-                return await msg('scene', 'execute-component-method', {
+                const payload = {
                     uuid: args.uuid,
                     name: args.name,
-                    args: args.args || [],
+                    args: args.args === undefined ? [] : args.args,
+                };
+                await msg('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp',
+                    method: 'validateComponentMethod',
+                    args: [payload],
                 });
+                return await msg('scene', 'execute-component-method', payload);
             },
         },
 

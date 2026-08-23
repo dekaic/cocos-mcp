@@ -152,7 +152,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `asset_reimport` | 重新导入指定资源 |
 | `asset_create` | 创建新资源 |
 | `asset_save` | 保存资源内容 |
-| `asset_delete` | 删除资源 |
+| `asset_delete` | 通过 Creator AssetDB 删除资源；Creator 拒绝删除时返回 tool error |
 | `asset_move` | 移动/重命名资源 |
 
 `asset_query_assets` 的兼容策略是 opt-in 分页：省略 `offset` / `limit` 时，`assets` 仍包含全部匹配项；响应同时给出 `total`、`offset`、`limit`、`hasMore` 和 `nextOffset`。`fields` 只保留每项指定的顶层字段。大工程应主动分页，因为不传参数仍可能产生大响应。

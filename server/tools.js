@@ -440,7 +440,11 @@ function defineTools(ctx) {
                 required: ['url'],
             },
             handler: async function (args) {
-                return await msg('asset-db', 'delete-asset', args.url);
+                var result = await msg('asset-db', 'delete-asset', args.url);
+                if (result === null || result === undefined) {
+                    throw new Error('asset_delete failed: Creator AssetDB did not delete ' + args.url);
+                }
+                return result;
             },
         },
         {

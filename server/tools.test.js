@@ -27,3 +27,26 @@ test('scene_create_component forwards node uuid and component class to Cocos', a
         { uuid: 'node-uuid', component: 'cc.UISkew' },
     ]]);
 });
+
+test('asset_delete rejects a null AssetDB result instead of reporting success', async () => {
+    const calls = [];
+    const tools = defineTools({
+        msg: async function () {
+            calls.push(Array.from(arguments));
+            return null;
+        },
+        local: {},
+    });
+    const tool = tools.find(function (item) { return item.name === 'asset_delete'; });
+
+    assert.ok(tool, 'asset_delete is registered');
+    await assert.rejects(
+        tool.handler({ url: 'db://assets/__scratch.json' }),
+        /asset_delete failed.*db:\/\/assets\/__scratch\.json/
+    );
+    assert.deepEqual(calls, [[
+        'asset-db',
+        'delete-asset',
+        'db://assets/__scratch.json',
+    ]]);
+});

@@ -144,7 +144,7 @@ var OFFLINE_TOOLS = [
     },
     {
         name: 'animation_query',
-        description: '[offline] 不需要 Cocos 编辑器运行。查询 Creator 3.8 AnimationClip 的轨道、路径、通道和关键帧。\n' +
+        description: '[offline] 不需要 Cocos 编辑器运行。查询 Creator 3.8 AnimationClip 的轨道、路径、通道、关键帧和事件。\n' +
             'filePath 必须是 .anim 文件的绝对路径。',
         inputSchema: {
             type: 'object',

@@ -184,7 +184,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `prefab_query` | 查询 tree、node、find、field 或 overrides；tree/node 支持 `withComps` |
 | `prefab_edit` | 声明式批量编辑 prefab，所有 op 成功后一次性落盘 |
 | `prefab_batch` | 从 JSON 文件读取 ops 后批量编辑 prefab |
-| `animation_query` | 查询 AnimationClip 的标准化轨道、通道与关键帧结构 |
+| `animation_query` | 查询 AnimationClip 的标准化轨道、通道、关键帧与只读 `events` 结构；无事件时返回空数组 |
 | `animation_create` | 创建 `UntypedTrack + RealCurve` 数值曲线 AnimationClip；拒绝覆盖已有文件 |
 
 完整 op 列表与配方见 [`doc/cli.md`](./doc/cli.md)。

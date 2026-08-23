@@ -38,7 +38,7 @@ Subcommands:
   query <anim> [--selector tree]
   batch <anim> <ops.json> [--project-root <path>] [--dry-run]
 
-query 使用 AnimationClip 专用解析器。batch 是保留的 legacy prefab-op 包装，
+query 使用 AnimationClip 专用解析器，输出轨道、关键帧和只读 events。batch 是保留的 legacy prefab-op 包装，
 不支持编辑 AnimationClip 曲线；新建数值曲线请用 animation_create。
 `);
     return;

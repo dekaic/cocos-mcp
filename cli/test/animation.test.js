@@ -26,7 +26,7 @@ function makeTmpDir(tag) {
   return dir;
 }
 
-function officialStyleClip() {
+function officialStyleClip(events = []) {
   return [
     {
       __type__: 'cc.AnimationClip',
@@ -39,7 +39,7 @@ function officialStyleClip() {
       _duration: 1,
       _hash: 3157329513,
       _tracks: [{ __id__: 1 }],
-      _events: [],
+      _events: events,
       _exoticAnimation: null,
     },
     {
@@ -87,9 +87,9 @@ function officialStyleClip() {
   ];
 }
 
-function writeOfficialStyleFixture(tag) {
+function writeOfficialStyleFixture(tag, events) {
   const filePath = path.join(makeTmpDir(tag), 'Easing_Linear.anim');
-  fs.writeFileSync(filePath, JSON.stringify(officialStyleClip(), null, 2) + '\n', 'utf8');
+  fs.writeFileSync(filePath, JSON.stringify(officialStyleClip(events), null, 2) + '\n', 'utf8');
   return filePath;
 }
 
@@ -150,6 +150,18 @@ test('queryAnimationClip normalizes position channels and real keyframes', () =>
     result.tracks[0].channels[0].keyframes.map((keyframe) => [keyframe.time, keyframe.value]),
     [[0, -200], [1, 200]]
   );
+  assert.deepEqual(result.events, []);
+});
+
+test('queryAnimationClip exposes AnimationClip events without changing params', () => {
+  const expected = [{
+    frame: 1.0166666666666666,
+    func: 'AnimationEventTest',
+    params: ['接收到动画事件', 7, { source: 'fixture' }],
+  }];
+  const filePath = writeOfficialStyleFixture('events', expected);
+
+  assert.deepEqual(queryAnimationClip(filePath).events, expected);
 });
 
 test('createAnimationClip writes a queryable clip without overwriting an existing file', () => {

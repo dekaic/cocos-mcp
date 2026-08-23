@@ -127,6 +127,13 @@ function queryAnimationClip(filePath) {
   const data = parseAnimationClip(filePath);
   const clip = data.clip;
   const trackRefs = Array.isArray(clip._tracks) ? clip._tracks : [];
+  const events = Array.isArray(clip._events)
+    ? clip._events.map((event) => ({
+      frame: event && event.frame,
+      func: event && event.func,
+      params: event && Array.isArray(event.params) ? event.params.slice() : [],
+    }))
+    : [];
 
   const tracks = trackRefs.map((trackRef) => {
     const trackId = trackRef.__id__;
@@ -169,6 +176,7 @@ function queryAnimationClip(filePath) {
     wrapMode: clip.wrapMode,
     duration: clip._duration,
     tracks,
+    events,
   };
 }
 

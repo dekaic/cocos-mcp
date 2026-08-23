@@ -148,6 +148,29 @@ function makeAnimationSpec() {
     };
 }
 
+function makeAnimationEventFixture() {
+    var filePath = path.join(
+        os.tmpdir(),
+        'AnimationEvent-router-fixture-' + process.pid + '-' + nextTmpId++ + '.anim'
+    );
+    fs.writeFileSync(filePath, JSON.stringify([{
+        __type__: 'cc.AnimationClip',
+        _name: 'AnimationEvent',
+        sample: 60,
+        speed: 1,
+        wrapMode: 2,
+        _duration: 2,
+        _tracks: [],
+        _events: [{
+            frame: 1.0166666666666666,
+            func: 'AnimationEventTest',
+            params: ['接收到动画事件'],
+        }],
+    }], null, 2) + '\n', 'utf8');
+    TMP_FILES.push(filePath);
+    return filePath;
+}
+
 test('animation_create + animation_query 完成结构 roundtrip', async () => {
     var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-animation-'));
     var filePath = path.join(dir, 'router-position-loop.anim');
@@ -170,6 +193,19 @@ test('animation_create + animation_query 完成结构 roundtrip', async () => {
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
+});
+
+test('animation_query exposes AnimationClip events through the Router offline tool', async () => {
+    var result = await handleOfflineToolCall('animation_query', {
+        filePath: makeAnimationEventFixture(),
+    });
+    var data = JSON.parse(result.content[0].text);
+
+    assert.deepEqual(data.events, [{
+        frame: 1.0166666666666666,
+        func: 'AnimationEventTest',
+        params: ['接收到动画事件'],
+    }]);
 });
 
 test('animation tools reject relative filePath', async () => {

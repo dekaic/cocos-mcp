@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- 增加 `scene_instantiate_prefab`，可通过 Prefab 资源 UUID 在当前 Scene 的指定父节点下创建并保留关联的实例。
+- `animation_query` 现在始终返回只读 `events` 数组，并公开事件的 frame、函数名与参数。
+
+### Fixed
+
+- Router 清理 stale registry 时不再误删同一项目仍在使用的 editor spawn lock。
+- `scene_execute_component_method` 现在使用组件 UUID 执行方法，并对无效组件、方法或参数 fail-closed。
+- `asset_delete` 在 Creator AssetDB 拒绝删除时返回 tool error，不再把失败响应报告为成功。
+
 ## [2.0.0] - 2026-08-13
 
 ### Added

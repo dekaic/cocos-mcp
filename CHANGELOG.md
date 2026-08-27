@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- CLI `build --strict` 现在将 Creator 3.8.x 的官方成功退出码 `36` 与 `0` 一并归一为成功，同时继续把其他退出码和信号终止视为失败。
 - Router 清理 stale registry 时不再误删同一项目仍在使用的 editor spawn lock。
 - `scene_execute_component_method` 现在使用组件 UUID 执行方法，并对无效组件、方法或参数 fail-closed。
 - `asset_delete` 在 Creator AssetDB 拒绝删除时返回 tool error，不再把失败响应报告为成功。

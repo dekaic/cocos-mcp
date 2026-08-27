@@ -34,6 +34,14 @@ function tmpCopy() {
   return dest;
 }
 
+function tmpExitExecutable(code) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-build-exit-test-'));
+  const executable = path.join(dir, 'fake-cocos');
+  fs.writeFileSync(executable, `#!${process.execPath}\nprocess.exit(${code});\n`, 'utf8');
+  fs.chmodSync(executable, 0o755);
+  return { dir, executable };
+}
+
 // ─── query tree ──────────────────────────────────────────────
 
 test('CLI query tree: 退出码 0，输出可解析 JSON，含 name=HomeUI 的根节点', () => {
@@ -251,4 +259,29 @@ test('CLI open --with-login: dry-run omits --nologin', () => {
   assert.doesNotMatch(result.stdout, /--nologin/);
 
   fs.rmSync(project, { recursive: true, force: true });
+});
+
+test('CLI build --strict normalizes Creator success code 36 and preserves failure code 34', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-build-project-'));
+  const success = tmpExitExecutable(36);
+  const failure = tmpExitExecutable(34);
+
+  try {
+    const successResult = run([
+      'build', '--project', project, '--cocos', success.executable,
+      '--platform', 'web-mobile', '--strict',
+    ]);
+    assert.equal(successResult.status, 0, `stdout: ${successResult.stdout}\nstderr: ${successResult.stderr}`);
+    assert.match(successResult.stdout, /Cocos 退出码: 36.*构建成功/);
+
+    const failureResult = run([
+      'build', '--project', project, '--cocos', failure.executable,
+      '--platform', 'web-mobile', '--strict',
+    ]);
+    assert.equal(failureResult.status, 34, `stdout: ${failureResult.stdout}\nstderr: ${failureResult.stderr}`);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(success.dir, { recursive: true, force: true });
+    fs.rmSync(failure.dir, { recursive: true, force: true });
+  }
 });

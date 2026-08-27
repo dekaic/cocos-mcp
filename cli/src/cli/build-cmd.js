@@ -7,13 +7,13 @@
 //
 // 退出码：Cocos 退出非 0 常见于 postBuild 阶段的资源警告等非致命问题（主构建其实成功）。
 //   默认照产物存在性判定：产物齐了就退 0（成功），产物缺才透传 Cocos 退出码（失败）。
-//   --strict 关掉这个兜底，直接透传 Cocos 退出码。
+//   --strict 关掉这个兜底；Creator 定义的成功码 0/36 归一为 0，其余退出码透传。
 //
 // 用法：
 //   cocos-mcp-cli build --project <path> --version 3.8.8 --config <buildConfig.json>
 //   cocos-mcp-cli build --project <path> --cocos <CocosCreator可执行> --platform web-mobile
 //   cocos-mcp-cli build ... --dry-run     # 只打印命令不真跑
-//   cocos-mcp-cli build ... --strict      # 严格透传 Cocos 退出码（不做产物兜底）
+//   cocos-mcp-cli build ... --strict      # 不做产物兜底；0/36 成功，其余退出码透传
 // ============================================================
 
 'use strict';
@@ -97,7 +97,7 @@ function cmdBuild(rest) {
             '  --platform <plat>      或按平台构建（→ --build "platform=<plat>"），如 web-mobile / alipay-mini-game\n' +
             '  --debug                平台构建时 debug=true（默认 false）\n' +
             '  --dry-run              只打印将执行的命令，不真跑\n' +
-            '  --strict               严格透传 Cocos 退出码（默认会按产物存在性兜底，把 postBuild 非致命的非 0 当成功）\n\n' +
+            '  --strict               不做产物兜底；Creator 成功码 0/36 退 0，其余退出码透传\n\n' +
             '示例:\n' +
             '  cocos-mcp-cli build -p /path/to/forest -v 3.8.8 --config /path/build.json\n' +
             '  cocos-mcp-cli build -p /path/to/forest -v 3.8.8 --platform web-mobile --dry-run\n');
@@ -130,8 +130,8 @@ function cmdBuild(rest) {
     const child = spawn(cocos, argv, { stdio: 'inherit' });
     child.on('error', function (e) { die('启动 Cocos 失败: ' + e.message); });
     child.on('exit', function (code) {
-        if (code === 0) {
-            process.stdout.write('\nCocos 退出码: 0 — 构建成功\n');
+        if (code === 0 || code === 36) {
+            process.stdout.write('\nCocos 退出码: ' + code + ' — 构建成功\n');
             process.exit(0);
         }
         const arti = a.strict ? null : checkArtifact(a);

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-27
+
 ### Added
 
 - 增加 `scene_instantiate_prefab`，可通过 Prefab 资源 UUID 在当前 Scene 的指定父节点下创建并保留关联的实例。

@@ -1,10 +1,12 @@
 # Changelog
 
-本文记录 `cocos-mcp` 的用户可见变化。版本采用 SemVer；未发布内容只进入 `[Unreleased]`，不能仅凭本文件称为正式发布。
+本文记录 `cocos-mcp` 的用户可见变化。版本采用 SemVer；版本准备前的变更进入 `[Unreleased]`。正式版本标题只固定变更范围，是否已发布以对应 tag、Release 与制品验证为准。
 
 ## [Unreleased]
 
-### Breaking changes（下一主版本修复范围，尚未发布）
+## [3.0.0] - 2026-09-08
+
+### Breaking changes
 
 - Editor 调用要求真实项目路径与服务代次 `instanceId`；副作用调用要求 `operationId`，生命周期不再接受短名／PID-only／restart 隐式 spawn。旧注册只报告迁移，不兼容写入回退。
 - 本机 HTTP 强制每代 bearer、拒绝任何 Origin，完成版本协商与 initialized 生命周期；认证 GET /mcp 为 405，不虚报 HTTP 推送。参数和控制结果采用统一契约。

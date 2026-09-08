@@ -442,7 +442,7 @@ async function startMcpServer() {
 
     var server = sdk.createServer({
         name: 'cocos-mcp',
-        version: '2.1.0',
+        version: '3.0.0',
         port: MCP_DEFAULT_PORT,
         bearerToken: _registration.token,
         allowedOrigins: [],

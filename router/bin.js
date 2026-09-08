@@ -14,7 +14,7 @@ var classify = require('../cli/src/runtime/effects').classify;
 var results = require('../cli/src/runtime/results');
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
-var ROUTER_INFO = { name: 'cocos-mcp-router', version: '2.1.0' };
+var ROUTER_INFO = { name: 'cocos-mcp-router', version: '3.0.0' };
 var PROTOCOL_VERSION = '2025-06-18';
 
 function sanitize(name) { return String(name || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_'); }

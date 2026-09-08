@@ -103,7 +103,8 @@ function _expandGlob(pattern) {
 function cmdBatch(args) {
   const { flags, positional } = parseFlags(args);
 
-  const editOptions = {};
+  const editOptions = { operationId: flags['operation-id'] };
+  for (const name of Object.keys(flags)) if (!['operation-id', 'project-root', 'dry-run', 'glob'].includes(name)) die('batch: unknown flag --' + name);
   if (flags['project-root']) {
     editOptions.projectRoot = resolvePath(flags['project-root']);
   }
@@ -117,9 +118,10 @@ function cmdBatch(args) {
     if (!opsArg) die('batch --glob: 必须提供 <ops.json>');
     const opsPath = resolvePath(opsArg);
     if (!fs.existsSync(opsPath)) die(`batch --glob: ops 文件不存在: ${opsPath}`);
-    const ops = _readOps(opsPath);
+    const opsRaw = fs.readFileSync(opsPath, 'utf8');
+    const ops = _readOpsRaw(opsRaw);
 
-    const matched = _expandGlob(flags['glob']);
+    const matched = _expandGlob(flags['glob']).sort();
     if (matched.length === 0) {
       die(`batch --glob: pattern "${flags['glob']}" 未匹配任何文件`);
     }
@@ -127,10 +129,15 @@ function cmdBatch(args) {
     const summary = [];
     for (const prefabPath of matched) {
       try {
-        const result = editPrefab(prefabPath, ops, editOptions);
+        const result = editPrefab(prefabPath, ops, { ...editOptions,
+          operationId: editOptions.operationId && require('../runtime/identity').hash(editOptions.operationId + '\0' + fs.realpathSync(prefabPath)),
+          inputHashes: { ops: require('../runtime/identity').hash(opsRaw) },
+          inputFiles: [{ file: opsPath, hash: require('../runtime/identity').hash(opsRaw) }] });
         summary.push({ file: path.relative(process.cwd(), prefabPath), ...result });
       } catch (e) {
         summary.push({ file: path.relative(process.cwd(), prefabPath), error: e.message });
+        process.exitCode = 1;
+        break;
       }
     }
     process.stdout.write(JSON.stringify({ matchedCount: matched.length, results: summary }, null, 2) + '\n');
@@ -145,23 +152,18 @@ function cmdBatch(args) {
   const prefabPath = resolvePath(prefabArg);
   if (!fs.existsSync(prefabPath)) die(`batch: prefab 文件不存在: ${prefabPath}`);
 
-  const ops = opsArg === '-'
-    ? _readOpsRaw(fs.readFileSync('/dev/stdin', 'utf8'))
-    : _readOps(resolvePath(opsArg));
-
+  const opsRaw = fs.readFileSync(opsArg === '-' ? 0 : resolvePath(opsArg), 'utf8');
+  const ops = _readOpsRaw(opsRaw);
+  editOptions.inputHashes = { ops: require('../runtime/identity').hash(opsRaw) };
+  if (opsArg !== '-') editOptions.inputFiles = [{ file: resolvePath(opsArg), hash: editOptions.inputHashes.ops }];
   let result;
   try {
     result = editPrefab(prefabPath, ops, editOptions);
   } catch (e) {
-    die('batch 失败: ' + e.message);
+    throw e;
   }
 
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-}
-
-function _readOps(opsPath) {
-  if (!fs.existsSync(opsPath)) die(`batch: ops 文件不存在: ${opsPath}`);
-  return _readOpsRaw(fs.readFileSync(opsPath, 'utf8'));
 }
 
 function _readOpsRaw(raw) {

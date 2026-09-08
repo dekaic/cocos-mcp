@@ -55,7 +55,14 @@ function requireComponentMethod(component, name) {
     if (typeof name !== 'string' || !name) {
         throw new Error('method name must be a non-empty string');
     }
-    var method = component[name];
+    var owner = component;
+    var descriptor;
+    while (owner && !descriptor) {
+        descriptor = Object.getOwnPropertyDescriptor(owner, name);
+        owner = Object.getPrototypeOf(owner);
+    }
+    // Validation must not invoke user-defined accessors before execution is admitted.
+    var method = descriptor && descriptor.value;
     if (typeof method !== 'function') throw new Error('method not found: ' + name);
     return method;
 }

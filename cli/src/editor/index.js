@@ -11,7 +11,9 @@
 'use strict';
 
 const { parsePrefab } = require('../parse.js');
-const { writePrefab } = require('../write.js');
+const { formatPrefab } = require('../write.js');
+const { runOffline } = require('../runtime/transactions');
+const { projectForFile, contained } = require('../runtime/identity');
 const { computeDiff } = require('./diff.js');
 
 // 各 op handler
@@ -115,8 +117,14 @@ function editPrefab(filePath, ops, options) {
 
   const opts = options || {};
 
+  const projectRoot = projectForFile(filePath, opts.projectRoot);
+  filePath = contained(projectRoot, filePath);
+  return runOffline(projectRoot, opts.tool || 'prefab_edit', opts.logicalArgs || { filePath, ops }, opts, plan => {
   const prefabData = parsePrefab(filePath);
-  prefabData.resolverStartPath = opts.projectRoot || filePath;
+  prefabData.resolverStartPath = projectRoot;
+  // CLI shortcuts that preserve other fields must resolve them from this locked plan, not an earlier read.
+  const plannedOps = opts.prepareOps ? opts.prepareOps(prefabData, ops) : ops;
+  validateOps(plannedOps, Object.keys(OP_HANDLERS));
 
   const dryRun = !!opts.dryRun;
   prefabData.dryRun = dryRun;
@@ -128,7 +136,7 @@ function editPrefab(filePath, ops, options) {
   const affectedNames = [];
 
   let opsApplied = 0;
-  for (const op of ops) {
+  for (const op of plannedOps) {
     if (!op || typeof op.op !== 'string') {
       throw new Error(`editPrefab: op 格式错误（缺少 op 字段）: ${JSON.stringify(op)}`);
     }
@@ -148,8 +156,9 @@ function editPrefab(filePath, ops, options) {
     opsApplied++;
   }
 
-  if (!dryRun) {
-    writePrefab(filePath, prefabData.elements, prefabData.raw);
+  // A semantic no-op preserves the original bytes, including compact JSON and formatting.
+  if (JSON.stringify(JSON.parse(prefabData.raw)) !== JSON.stringify(prefabData.elements)) {
+    plan.write(filePath, formatPrefab(prefabData.elements, prefabData.raw));
   }
 
   for (const id of affectedIds) {
@@ -162,7 +171,6 @@ function editPrefab(filePath, ops, options) {
   }
 
   const result = {
-    changed: !dryRun,
     opsApplied,
     nodesAffected: affectedNames,
   };
@@ -173,6 +181,7 @@ function editPrefab(filePath, ops, options) {
   }
 
   return result;
+  });
 }
 
 module.exports = { editPrefab, OP_HANDLERS };

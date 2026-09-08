@@ -28,7 +28,7 @@ function die(msg) {
   process.exit(1);
 }
 
-function main(argv) {
+async function main(argv) {
   const cmd = argv[0];
   const rest = argv.slice(1);
 
@@ -56,11 +56,25 @@ function main(argv) {
   } else if (cmd === 'ensure-meta') {
     cmdEnsureMeta(rest);
   } else if (cmd === 'build') {
-    cmdBuild(rest);
+    await cmdBuild(rest);
   } else if (cmd === 'open') {
-    cmdOpen(rest);
+    await cmdOpen(rest);
   } else if (cmd === 'fix-meta') {
     cmdFixMeta(rest);
+  } else if (['operation-status', 'operation-reconcile', 'offline-recover'].includes(cmd)) {
+    const { flags, positional } = require('./flags').parseFlags(rest);
+    const allowed = ['project-root', 'operation-id'].concat(cmd === 'operation-reconcile' ? ['outcome', 'evidence'] : cmd === 'offline-recover' ? ['transaction-id', 'apply'] : []);
+    if (positional.length || Object.keys(flags).some(key => !allowed.includes(key))) throw new Error('Invalid arguments for ' + cmd);
+    const store = require('../runtime/operations').createStore();
+    const project = flags['project-root'];
+    let result;
+    if (cmd === 'operation-status') {
+      result = store.status(project, flags['operation-id']);
+      if (Array.isArray(result)) result = result.filter(record => record.unresolved);
+    }
+    else if (cmd === 'operation-reconcile') result = store.reconcile(project, flags['operation-id'], flags.outcome, flags.evidence);
+    else result = require('../runtime/transactions').recover(project, flags['transaction-id'], { operationId: flags['operation-id'], dryRun: flags.apply !== true });
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   } else {
     die(`未知子命令 "${cmd}"，可用: query / set / batch / anim / diff / create-prefab / extract-prefab / compact-prefab / ensure-meta / build / fix-meta`);
   }

@@ -28,6 +28,8 @@
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
+const { runOffline } = require('../runtime/transactions');
+const { canonicalProject } = require('../runtime/identity');
 
 const BORDER_KEYS = ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'];
 
@@ -55,7 +57,8 @@ function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
  */
 function fixMeta(projectOrRoot, opts) {
   opts = opts || {};
-  var dryRun = !!opts.dryRun;
+  const projectRoot = canonicalProject(path.resolve(projectOrRoot));
+  return runOffline(projectRoot, 'meta_fix', {}, { ...opts, dryRun: opts.dryRun === undefined ? true : opts.dryRun }, plan => {
 
   // 统一带 core.quotePath=false：否则 git 把中文等非 ASCII 路径加引号转义，path.join 会失配
   function git(root, args) {
@@ -76,15 +79,17 @@ function fixMeta(projectOrRoot, opts) {
   for (var i = 0; i < changed.length; i++) {
     var rel = changed[i];
     var abs = path.join(gitRoot, rel);
+    const relative = path.relative(projectRoot, abs);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) continue;
     if (!fs.existsSync(abs)) continue;
 
     var workStr, headStr, work, head;
-    try { workStr = fs.readFileSync(abs, 'utf8'); work = JSON.parse(workStr); } catch (e) { continue; }
+    try { workStr = plan.read(abs); work = JSON.parse(workStr); } catch (e) { if (e.code && e.code !== 'ENOENT') throw e; continue; }
     try { headStr = git(gitRoot, ['show', 'HEAD:' + rel]); head = JSON.parse(headStr); } catch (e) { continue; } // git 里没有（新文件）跳过
 
     // 1) 纯 key 顺序/格式噪音（值深度相等）→ 还原 git 原文
     if (valueEqual(work, head)) {
-      if (!dryRun) fs.writeFileSync(abs, headStr, 'utf8');
+      plan.write(abs, headStr);
       reorderFiles++;
       details.push('[顺序] ' + rel);
       continue;
@@ -122,11 +127,8 @@ function fixMeta(projectOrRoot, opts) {
 
     if (metaChanged) {
       fixedFiles++;
-      if (!dryRun) {
-        // 还原后若整体已等于 git → 直接写 git 原文（连带消顺序噪音）；否则按 work 写回、保留其它真实改动
-        if (valueEqual(work, head)) fs.writeFileSync(abs, headStr, 'utf8');
-        else fs.writeFileSync(abs, JSON.stringify(work, null, 2) + '\n', 'utf8');
-      }
+      // Preserve unrelated edits; only verified corrections enter the transaction.
+      plan.write(abs, valueEqual(work, head) ? headStr : JSON.stringify(work, null, 2) + '\n');
     }
   }
 
@@ -136,6 +138,7 @@ function fixMeta(projectOrRoot, opts) {
     borderFrames: borderFrames, trimFrames: trimFrames,
     details: details,
   };
+  });
 }
 
 module.exports = { fixMeta: fixMeta };

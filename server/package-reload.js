@@ -9,11 +9,14 @@ function isInside(root, filename) {
 }
 
 function resolvePackagePath(packageApi, name) {
-    if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) return name;
+    if (typeof name !== 'string' || !name.trim()) throw new Error('Package name is required');
+    var namedPath = name.indexOf('/') >= 0 || name.indexOf('\\') >= 0;
     var list = (packageApi.getPackages() || []).filter(function (pkg) {
-        return pkg && (pkg.name === name || (pkg.info && pkg.info.name === name));
+        if (!pkg || !pkg.path) return false;
+        if (!namedPath) return pkg.name === name || (pkg.info && pkg.info.name === name);
+        try { return fs.realpathSync(pkg.path) === fs.realpathSync(name); } catch (_) { return false; }
     });
-    if (!list.length || !list[0].path) {
+    if (list.length !== 1 || !list[0].path) {
         throw new Error('找不到扩展 "' + name + '" 的注册路径（getPackages 匹配 ' + list.length + ' 条）');
     }
     return list[0].path;

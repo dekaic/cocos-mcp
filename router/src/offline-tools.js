@@ -16,6 +16,8 @@ var path = require('path');
 // 延迟 require，避免 bin.js 加载时 cli 路径不对
 // __dirname = router/src/，cli 相对路径为 ../../cli/src/index.js
 var CLI_INDEX = path.resolve(__dirname, '../../cli/src/index.js');
+var { hash } = require('../../cli/src/runtime/identity');
+var results = require('../../cli/src/runtime/results');
 
 function getCli() {
     return require(CLI_INDEX);
@@ -235,6 +237,24 @@ var OFFLINE_TOOLS = [
     },
 ];
 
+OFFLINE_TOOLS.forEach(function (tool) {
+    tool.inputSchema.additionalProperties = false;
+    var mutation = ['prefab_edit', 'prefab_batch', 'animation_create'].includes(tool.name);
+    tool.annotations = { readOnlyHint: !mutation };
+    if (mutation) {
+        tool.description = tool.description.replace('不需要 Cocos 编辑器运行。', '预演可在线进行；正式提交要求 Creator 关闭。') + '\n正式提交必须传 operationId；相同 ID 重试仅查询原操作。';
+        Object.assign(tool.inputSchema.properties, {
+            projectRoot: { type: 'string', description: '项目真实绝对路径；省略时从资源路径推断，禁止跨项目写入。' },
+            dryRun: { type: 'boolean', default: false, description: '预演重新规划且不写资源；不构成后续提交凭证。' },
+            operationId: { type: 'string', minLength: 1, maxLength: 128 },
+        });
+    }
+});
+OFFLINE_TOOLS.push({ name: 'offline_recover', description: '[offline] Preview recovery of one transaction. Actual recovery requires Creator closed, dryRun:false and a new recovery operationId. No force bypass.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['projectRoot', 'transactionId'], properties: {
+        projectRoot: { type: 'string' }, transactionId: { type: 'string' }, dryRun: { type: 'boolean', default: true }, operationId: { type: 'string', minLength: 1 },
+    } }, annotations: { readOnlyHint: false } });
+
 // ── Tool 名称集合（用于快速判断是否是 offline tool）──────────────
 
 var OFFLINE_TOOL_NAMES = new Set(OFFLINE_TOOLS.map(function (t) { return t.name; }));
@@ -257,8 +277,10 @@ function isOfflineTool(name) {
  * @param {object} args   tool 参数
  * @returns {{ content: Array }}
  */
-async function handleOfflineToolCall(name, args) {
+async function handleOfflineToolCall(name, args, context = {}) {
     var cli = getCli();
+    var options = { projectRoot: args.projectRoot, dryRun: args.dryRun, operationId: args.operationId, store: context.store };
+    if (name === 'offline_recover') return results.normalize(require('../../cli/src/runtime/transactions').recover(args.projectRoot, args.transactionId, options));
 
     if (name === 'prefab_query') {
         requireAbsolutePath(args.filePath, 'prefab_query');
@@ -273,10 +295,8 @@ async function handleOfflineToolCall(name, args) {
         if (!Array.isArray(args.ops) || args.ops.length === 0) {
             throw new Error('[prefab_edit] ops 必须是非空数组');
         }
-        var editResult = cli.editPrefab(args.filePath, args.ops);
-        return {
-            content: [{ type: 'text', text: JSON.stringify(editResult, null, 2) }],
-        };
+        var editResult = cli.editPrefab(args.filePath, args.ops, options);
+        return results.normalize(editResult);
     }
 
     if (name === 'prefab_batch') {
@@ -292,10 +312,10 @@ async function handleOfflineToolCall(name, args) {
         if (!Array.isArray(ops) || ops.length === 0) {
             throw new Error('[prefab_batch] opsJsonPath 文件内容必须是非空数组');
         }
-        var batchResult = cli.editPrefab(args.filePath, ops);
-        return {
-            content: [{ type: 'text', text: JSON.stringify(batchResult, null, 2) }],
-        };
+        var batchResult = cli.editPrefab(args.filePath, ops, { ...options, tool: 'prefab_batch',
+            logicalArgs: { filePath: args.filePath, opsJsonPath: args.opsJsonPath }, inputHashes: { ops: hash(opsRaw) },
+            inputFiles: [{ file: args.opsJsonPath, hash: hash(opsRaw) }] });
+        return results.normalize(batchResult);
     }
 
     if (name === 'animation_query') {
@@ -308,10 +328,8 @@ async function handleOfflineToolCall(name, args) {
 
     if (name === 'animation_create') {
         requireAbsolutePath(args.filePath, 'animation_create');
-        var createResult = cli.createAnimationClip(args.filePath, args.clip);
-        return {
-            content: [{ type: 'text', text: JSON.stringify(createResult, null, 2) }],
-        };
+        var createResult = cli.createAnimationClip(args.filePath, args.clip, options);
+        return results.normalize(createResult);
     }
 
     throw new Error('offline-tools: 未知 tool "' + name + '"');

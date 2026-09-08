@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTools, findTool } = require('./test/tool-fixture.js');
 
-test('local_reload_package reports scheduled state and the runtime identity to compare', async () => {
+test('local_reload_package records completion only after the reload completion promise', async () => {
     const scheduled = [];
     const tool = findTool(makeTools({
         local: {
@@ -17,7 +17,7 @@ test('local_reload_package reports scheduled state and the runtime identity to c
                     },
                 };
             },
-            reloadPackage: function (name) { scheduled.push(name); },
+            reloadPackage: async function (name) { scheduled.push(name); return { instanceId: 'next-generation', verified: true }; },
         },
     }), 'local_reload_package');
 
@@ -27,8 +27,8 @@ test('local_reload_package reports scheduled state and the runtime identity to c
     assert.equal(result.ok, true);
     assert.equal(result.reloaded, 'cocos-mcp');
     assert.equal(result.accepted, true);
-    assert.equal(result.state, 'scheduled');
-    assert.equal(result.completionObserved, false);
+    assert.equal(result.state, 'completed');
+    assert.equal(result.completionObserved, true);
     assert.deepEqual(result.runtimeIdentityBefore, {
         runtimeBuildId: 'before-build',
         toolSchemaHash: 'before-schema',

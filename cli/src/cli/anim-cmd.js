@@ -46,6 +46,7 @@ query 使用 AnimationClip 专用解析器，输出轨道、关键帧和只读 e
 
   if (sub === 'query') {
     const { flags, positional } = parseFlags(rest);
+    for (const name of Object.keys(flags)) if (name !== 'selector') die('anim query: unknown flag --' + name);
     const animArg = positional[0];
     if (!animArg) die('anim query: 必须提供 <anim>');
     const animPath = resolvePath(animArg);
@@ -68,6 +69,7 @@ query 使用 AnimationClip 专用解析器，输出轨道、关键帧和只读 e
 
   if (sub === 'batch') {
     const { flags, positional } = parseFlags(rest);
+    for (const name of Object.keys(flags)) if (!['operation-id', 'project-root', 'dry-run'].includes(name)) die('anim batch: unknown flag --' + name);
     const [animArg, opsArg] = positional;
     if (!animArg) die('anim batch: 必须提供 <anim>');
     if (!opsArg) die('anim batch: 必须提供 <ops.json>');
@@ -76,15 +78,17 @@ query 使用 AnimationClip 专用解析器，输出轨道、关键帧和只读 e
     if (!fs.existsSync(animPath)) die(`anim batch: 文件不存在: ${animPath}`);
     if (!fs.existsSync(opsPath)) die(`anim batch: ops 文件不存在: ${opsPath}`);
 
+    const opsRaw = fs.readFileSync(opsPath, 'utf8');
     let ops;
     try {
-      ops = JSON.parse(fs.readFileSync(opsPath, 'utf8'));
+      ops = JSON.parse(opsRaw);
     } catch (e) {
       die('anim batch: ops.json 解析失败: ' + e.message);
     }
     if (!Array.isArray(ops)) die('anim batch: ops.json 必须是数组');
 
-    const editOptions = {};
+    const opsHash = require('../runtime/identity').hash(opsRaw);
+    const editOptions = { operationId: flags['operation-id'], inputHashes: { ops: opsHash }, inputFiles: [{ file: opsPath, hash: opsHash }] };
     if (flags['project-root']) editOptions.projectRoot = resolvePath(flags['project-root']);
     if (flags['dry-run'] === true) editOptions.dryRun = true;
 
@@ -92,7 +96,7 @@ query 使用 AnimationClip 专用解析器，输出轨道、关键帧和只读 e
     try {
       result = editPrefab(animPath, ops, editOptions);
     } catch (e) {
-      die('anim batch 失败: ' + e.message);
+      throw e;
     }
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return;

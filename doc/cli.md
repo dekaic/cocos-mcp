@@ -10,7 +10,9 @@
 
 **`.prefab` 文件必须用本 CLI 操作，禁止 `Read + Edit` 工具直接编辑。**
 
-prefab 是 JSON 数组，`__id__` 是数组下标，字符串替换会破坏所有引用关系。唯一例外：纯文本字面量替换（如改一个类名字符串）。
+prefab 是 JSON 数组，`__id__` 是数组下标。不要用字符串替换、手写 JSON 或直接写文件绕过工具和事务门禁。
+
+当前修复工作树遵守 [执行与迁移契约](./execution-contract.md)：正式写入要求 Creator 关闭、目标位于真实项目内，并提供 `--operation-id`；查询与 `--dry-run` 可在线。以下 op 配方只描述业务参数，不能替代项目与执行权检查。
 
 **适用场景**：
 
@@ -38,7 +40,7 @@ cd <你的 Cocos 项目根目录>
 node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command> [args]
 ```
 
-prefab 路径相对 `forest/` 项目根，不带 `forest/` 前缀：
+CLI 相对路径以当前工作目录解析；推荐在真实项目根执行或提供绝对路径：
 
 ```
 assets/packages/common/setting/ui/SettingUI.prefab
@@ -66,14 +68,14 @@ node bin/cocos-mcp-cli.js query <prefab> --selector tree
 # 3. 干跑预览改动（不写盘）
 node bin/cocos-mcp-cli.js batch <prefab> ops.json --dry-run
 
-# 4. 落盘
-node bin/cocos-mcp-cli.js batch <prefab> ops.json
+# 4. 明确关闭目标 Creator 后，以新的逻辑操作 ID 重新规划并提交
+node bin/cocos-mcp-cli.js batch <prefab> ops.json --operation-id edit-label-001
 
 # 5. 类型检查
 npx tsc --noEmit
 ```
 
-成功输出 `{"changed": true, "opsApplied": N, "nodesAffected": [...]}`。任一 op 失败整体不落盘（原子性）。
+规划失败不写资源；提交中断可能已经写入部分资源，此时冻结并要求显式恢复。多文件不是同时可见。成功结果保留业务字段并增加资源效果及操作上下文；`changed / written / wouldChange` 只统计资源及 `.meta`，不统计状态日志。预演不是承诺之后提交同一差异的凭证。
 
 ---
 
@@ -124,9 +126,10 @@ cocos-mcp-cli compact-prefab <prefab> [--dry-run]
 
 ### batch
 
-- `--project-root <path>`：当 `<prefab>` 放在项目目录外（如 `/tmp/`）时必须显式传入含 `assets/ + package.json` 的项目根。否则 className → 压缩 classId 查表失败时会抛错（避免写入 className 字符串导致 cocos MissingScript）。同样，刚新建 .ts 但 cocos 编辑器尚未生成 .ts.meta 时也会抛错——等 .meta 出来再跑。
+- `--project-root <path>`：显式指定含 `assets/ + package.json` 的真实项目根；省略时向上解析。指定根目录不会允许项目外写入。新脚本可在同批先 `ensure-meta` 再 `add-component`，预演使用虚拟元数据，不需要先写 `.meta`。
+- `--operation-id <id>`：正式写入必填。重试保留原 ID 和输入，先查询原结果；预演与正式执行不能共用一个已登记 ID。unknown 不得换 ID 重放。
 - `--dry-run`：跑完不写盘，输出 `{ changed: false, dryRun: true, diff: [...] }`，`diff` 是字段级差异 `{ "a.b.c": [old, new] }`
-- `--glob <pattern>`：第一个位置参数当 ops.json，对所有匹配 pattern 的 prefab 跑同一组 ops。pattern 支持 `**` / `*` / `?`，相对 cwd。每个文件独立执行，单文件失败不阻断后续。**先用 `--dry-run` 确认匹配范围**，再去掉落盘
+- `--glob <pattern>`：第一个位置参数当 ops.json，对匹配文件排序后逐项独立事务执行，子 ID 从父 ID 与真实文件路径稳定派生。第一项失败即停止后续提交并返回非零状态及逐项结果。先预演匹配范围；正式执行需关闭 Creator 并提供父操作 ID，不保证整个 glob 全有或全无。
 
 ```bash
 # glob 示例
@@ -169,7 +172,7 @@ node bin/cocos-mcp-cli.js diff old.prefab new.prefab
 
 从零创建一个新 prefab + 配套 `.prefab.meta`。`output-path` 不带 `.prefab` 后缀会自动补全。
 
-`uuid` / `fileId` 走 `deterministicUUID` / `deterministicFileId` 以 `create-prefab:<name>` 为种子推导：**同名 prefab 每次生成相同 UUID**，可重入。
+`uuid` / `fileId` 沿用以 `create-prefab:<name>` 为种子的确定性规则，但新建目标已经存在时拒绝覆盖。相同操作 ID 的重试返回原记录，不重新创建；新逻辑操作不能用“可重入”绕过存在性检查。
 
 | flag | 默认 | 说明 |
 |---|---|---|
@@ -729,7 +732,7 @@ CLI 防护（2026-05-20 修，`cli/src/editor/nested.js` `addRootTargetOverride`
    - `length === 1`（单字段，如 `["_btnClose"]`）：`splice` 到第一个数组字段 override 之前
    - `length > 1`（数组字段，如 `["_items", 0]`）：`push` 到末尾
 2. 已有的单字段 override 之间相对顺序不变（每次插入都在最后一个单字段之后、第一个数组字段之前）
-3. 历史脏数据需手工迁移（Python `pop(idx) + insert(0, ref)` 或者 `splice(arrayBoundary, 0, ref)`）
+3. 历史脏数据先保留最小复现，再通过受控 op／Creator 修复。工具尚未覆盖的迁移应报告缺口，不能用 Python 或直接数组写入绕过事务。
 
 诊断方法：用 `query --selector tree` 拿 prefab 整体结构，然后看 root `cc.PrefabInfo.targetOverrides` 数组里第一个 `propertyPath.length > 1` 条目的位置——之前的所有条目（包括目标单字段）能正常加载，之后的单字段都会被跳过。
 
@@ -816,7 +819,7 @@ extensions/cocos-mcp/cli/
 ### 测试
 
 ```bash
-# 6 个测试文件 116 个用例
+# 用当前测试输出记录实际数量，不把历史数量当作本轮结果
 for f in extensions/cocos-mcp/cli/test/*.test.js; do
   node --test "$f" 2>&1 | grep -E "^# (pass|fail)"
 done

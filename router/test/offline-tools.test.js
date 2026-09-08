@@ -26,11 +26,13 @@ const { parsePrefab } = require('../../cli/src/parse.js');
 
 const {
     isOfflineTool,
-    handleOfflineToolCall,
+    handleOfflineToolCall: handleOfflineToolCallImpl,
     requireAbsolutePath,
     OFFLINE_TOOLS,
 } = require('../src/offline-tools.js');
 const { fixturePath: FULL_FIXTURE } = require('../../cli/test/fixture-project.js');
+const fixture = require('../../cli/test/fixture-project');
+function handleOfflineToolCall(name, args) { return handleOfflineToolCallImpl(name, { ...args, ...(['prefab_edit', 'prefab_batch', 'animation_create'].includes(name) ? { operationId: require('crypto').randomUUID() } : {}) }, { store: fixture.store }); }
 
 const TMP_FILES = [];
 var nextTmpId = 0;
@@ -52,7 +54,7 @@ function makeMinimalHomePrefab() {
 
 function makeFixture(tag) {
     var dst = path.join(
-        os.tmpdir(),
+        path.join(fixture.projectRoot, 'assets'),
         'HomeUI-router-fixture-' + tag + '-' + process.pid + '-' + nextTmpId++ + '.prefab'
     );
     fs.writeFileSync(dst, JSON.stringify(makeMinimalHomePrefab(), null, 2) + '\n', 'utf-8');
@@ -68,7 +70,7 @@ function makeTmp(tag) {
 // ── OFFLINE_TOOLS 定义完整性 ────────────────────────────────────
 
 test('OFFLINE_TOOLS 导出 prefab 与 animation tool，名称正确', () => {
-    assert.equal(OFFLINE_TOOLS.length, 5);
+    assert.equal(OFFLINE_TOOLS.length, 6);
     var names = OFFLINE_TOOLS.map(function (t) { return t.name; });
     assert.ok(names.includes('prefab_query'));
     assert.ok(names.includes('prefab_edit'));
@@ -150,7 +152,7 @@ function makeAnimationSpec() {
 
 function makeAnimationEventFixture() {
     var filePath = path.join(
-        os.tmpdir(),
+        path.join(fixture.projectRoot, 'assets'),
         'AnimationEvent-router-fixture-' + process.pid + '-' + nextTmpId++ + '.anim'
     );
     fs.writeFileSync(filePath, JSON.stringify([{
@@ -172,7 +174,7 @@ function makeAnimationEventFixture() {
 }
 
 test('animation_create + animation_query 完成结构 roundtrip', async () => {
-    var dir = fs.mkdtempSync(path.join(os.tmpdir(), 'router-animation-'));
+    var dir = fs.mkdtempSync(path.join(path.join(fixture.projectRoot, 'assets'), 'router-animation-'));
     var filePath = path.join(dir, 'router-position-loop.anim');
     try {
         var created = await handleOfflineToolCall('animation_create', {
@@ -357,7 +359,7 @@ test('prefab_edit 相对路径 filePath 抛错', async () => {
 
 test('prefab_batch 从 JSON 文件读取 ops，成功写回', async () => {
     var tmp = makeTmp('batch');
-    var opsJson = path.join(os.tmpdir(), 'router-batch-ops-' + Date.now() + '.json');
+    var opsJson = path.join(path.join(fixture.projectRoot, 'assets'), 'router-batch-ops-' + Date.now() + '.json');
     var ops = [
         { op: 'set-active', node: 'HomeUI', active: false },
     ];

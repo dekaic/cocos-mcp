@@ -14,8 +14,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { compressUuid } = require('./id');
+const { readFile, existsFile, currentPlan, listFiles } = require('./runtime/plan');
 
 const _cache = new Map(); // projectRoot -> Map<className, entry>
 
@@ -51,20 +51,7 @@ function _extractCcClassNames(src) {
 }
 
 /** 在 scanDirs 下找所有 .ts（跳过 .d.ts），返回绝对路径数组。 */
-function _listTsFiles(scanDirs) {
-  const existingDirs = scanDirs.filter((dir) => fs.existsSync(dir));
-  if (existingDirs.length === 0) return [];
-  const roots = existingDirs.map((dir) => `"${dir.replace(/"/g, '\\"')}"`).join(' ');
-  try {
-    const raw = execSync(
-      `find ${roots} -name "*.ts" -not -name "*.d.ts" -type f`,
-      { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }
-    );
-    return raw.trim().split('\n').filter(Boolean);
-  } catch (e) {
-    throw new Error(`ClassIdResolver: find 命令失败: ${e.message}`);
-  }
-}
+function _listTsFiles(scanDirs) { return listFiles(scanDirs, file => file.endsWith('.ts') && !file.endsWith('.d.ts')); }
 
 /** 建 projectRoot 下的 className -> entry 索引。 */
 function _buildIndex(projectRoot) {
@@ -78,12 +65,12 @@ function _buildIndex(projectRoot) {
 
   for (const tsPath of tsFiles) {
     const metaPath = tsPath + '.meta';
-    if (!fs.existsSync(metaPath)) continue;
+    if (!existsFile(metaPath)) continue;
 
     let src, meta;
     try {
-      src = fs.readFileSync(tsPath, 'utf8');
-      meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      src = readFile(tsPath, 'utf8');
+      meta = JSON.parse(readFile(metaPath, 'utf8'));
     } catch (_) {
       continue;
     }
@@ -110,6 +97,7 @@ function _buildIndex(projectRoot) {
 
 function _getIndex(startPath) {
   const projectRoot = _findProjectRoot(startPath);
+  if (currentPlan()) return _buildIndex(projectRoot);
   if (_cache.has(projectRoot)) return _cache.get(projectRoot);
   const idx = _buildIndex(projectRoot);
   _cache.set(projectRoot, idx);

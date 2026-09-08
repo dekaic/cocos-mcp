@@ -12,14 +12,15 @@ const path = require('path');
 const os = require('os');
 
 const { parsePrefab } = require('../src/parse.js');
-const { writePrefab, detectIndent, detectTrailingNewline } = require('../src/write.js');
+const { writePrefab: writePrefabImpl, detectIndent, detectTrailingNewline } = require('../src/write.js');
+function writePrefab(file, data, raw) { return writePrefabImpl(file, data, raw, { operationId: require('crypto').randomUUID(), store: require('./fixture-project').store }); }
 const { setOverrideProperty, listOverrides } = require('../src/overrides.js');
 const {
   fixturePath: FIXTURE_PATH,
   projectRoot: FIXTURE_PROJECT_ROOT,
 } = require('./fixture-project.js');
 
-const TMP_PATH = path.join(os.tmpdir(), `HomeUI-smoke-${Date.now()}.prefab`);
+const TMP_PATH = path.join(FIXTURE_PROJECT_ROOT, 'assets', `HomeUI-smoke-${Date.now()}.prefab`);
 
 function parseWithFixtureProject(filePath) {
   const prefabData = parsePrefab(filePath);

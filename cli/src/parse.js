@@ -5,7 +5,7 @@
 
 'use strict';
 
-const fs = require('fs');
+const { readFile } = require('./runtime/plan');
 
 /**
  * 解析 prefab 文件
@@ -25,7 +25,7 @@ const fs = require('fs');
  * @returns {PrefabData}
  */
 function parsePrefab(filePath) {
-  const raw = fs.readFileSync(filePath, 'utf8');
+  const raw = readFile(filePath, 'utf8');
   let elements;
 
   try {

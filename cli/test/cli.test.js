@@ -17,19 +17,22 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { fixturePath: FIXTURE } = require('./fixture-project.js');
+const { fixturePath: FIXTURE, projectRoot: PROJECT_ROOT } = require('./fixture-project.js');
 
 const BIN = path.resolve(__dirname, '../bin/cocos-mcp-cli.js');
 
 function run(args) {
-  return spawnSync(process.execPath, [BIN, ...args], {
+  const mutation = ['set', 'batch', 'build', 'open', 'create-prefab', 'extract-prefab', 'compact-prefab', 'ensure-meta', 'fix-meta'].includes(args[0]);
+  const input = mutation && !args.includes('--operation-id') ? args.concat(['--operation-id', require('crypto').randomUUID()]) : args;
+  const bootstrap = `const operations = require(${JSON.stringify(path.resolve(__dirname, '../src/runtime/operations'))}); const createStore = operations.createStore; operations.createStore = options => createStore({ stateRoot: ${JSON.stringify(path.join(PROJECT_ROOT, 'cli-state'))}, ...options }); process.argv = [process.execPath, ${JSON.stringify(BIN)}, ...${JSON.stringify(input)}]; require(${JSON.stringify(BIN)});`;
+  return spawnSync(process.execPath, ['-e', bootstrap], {
     encoding: 'utf8',
     cwd: __dirname,
   });
 }
 
 function tmpCopy() {
-  const dest = path.join(os.tmpdir(), `HomeUI-cli-test-${Date.now()}.prefab`);
+  const dest = path.join(PROJECT_ROOT, 'assets', `HomeUI-cli-test-${Date.now()}.prefab`);
   fs.copyFileSync(FIXTURE, dest);
   return dest;
 }
@@ -41,6 +44,17 @@ function tmpExitExecutable(code) {
   fs.chmodSync(executable, 0o755);
   return { dir, executable };
 }
+
+test('CLI fix-meta help describes preview defaults and explicit closed-project application', () => {
+  const result = run(['fix-meta', '--help']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /默认.*预演/);
+  assert.match(result.stdout, /--apply/);
+  assert.match(result.stdout, /--operation-id <id>/);
+  assert.match(result.stdout, /Creator.*关闭/);
+  assert.match(result.stdout, /项目根目录/);
+  assert.doesNotMatch(result.stdout, /git 仓库或其子目录/);
+});
 
 // ─── query tree ──────────────────────────────────────────────
 
@@ -261,8 +275,10 @@ test('CLI open --with-login: dry-run omits --nologin', () => {
   fs.rmSync(project, { recursive: true, force: true });
 });
 
-test('CLI build --strict normalizes Creator success code 36 and preserves failure code 34', () => {
+test('CLI build accepts Creator success code 36 and preserves nonzero failure evidence without artifact fallback', () => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-build-project-'));
+  fs.mkdirSync(path.join(project, 'assets'));
+  fs.writeFileSync(path.join(project, 'package.json'), '{}');
   const success = tmpExitExecutable(36);
   const failure = tmpExitExecutable(34);
 
@@ -272,13 +288,14 @@ test('CLI build --strict normalizes Creator success code 36 and preserves failur
       '--platform', 'web-mobile', '--strict',
     ]);
     assert.equal(successResult.status, 0, `stdout: ${successResult.stdout}\nstderr: ${successResult.stderr}`);
-    assert.match(successResult.stdout, /Cocos 退出码: 36.*构建成功/);
+    assert.match(successResult.stdout, /"creatorExitCode": 36/);
 
     const failureResult = run([
       'build', '--project', project, '--cocos', failure.executable,
       '--platform', 'web-mobile', '--strict',
     ]);
-    assert.equal(failureResult.status, 34, `stdout: ${failureResult.stdout}\nstderr: ${failureResult.stderr}`);
+    assert.notEqual(failureResult.status, 0, `stdout: ${failureResult.stdout}\nstderr: ${failureResult.stderr}`);
+    assert.match(failureResult.stderr, /34/);
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(success.dir, { recursive: true, force: true });

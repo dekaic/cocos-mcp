@@ -22,7 +22,7 @@
 
 'use strict';
 
-const fs = require('fs');
+const { resourceCommand } = require('./resource-command');
 const path = require('path');
 const { deterministicUUID, deterministicFileId } = require('../id.js');
 const {
@@ -35,11 +35,10 @@ const {
 } = require('../primitives.js');
 
 function die(msg) {
-  process.stderr.write('Error: ' + msg + '\n');
-  process.exit(1);
+  throw new Error(msg);
 }
 
-function cmdCreatePrefab(argv) {
+function planCreatePrefab(argv, plan) {
   let outputPath = null;
   let name = null;
   let width = null;
@@ -139,6 +138,8 @@ function cmdCreatePrefab(argv) {
     userData: { syncNodeName: name },
   };
 
+  plan.write(path.resolve(outputPath), JSON.stringify(data, null, 2) + '\n', { create: true });
+  plan.write(path.resolve(outputPath + '.meta'), JSON.stringify(meta, null, 2) + '\n', { create: true });
   if (dryRun) {
     process.stdout.write('=== PREFAB ===\n');
     process.stdout.write(JSON.stringify(data, null, 2) + '\n');
@@ -147,14 +148,8 @@ function cmdCreatePrefab(argv) {
     return;
   }
 
-  const dir = path.dirname(outputPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  fs.writeFileSync(outputPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
-  fs.writeFileSync(outputPath + '.meta', JSON.stringify(meta, null, 2) + '\n', 'utf8');
-
-  process.stdout.write(`created: ${outputPath}\n`);
-  process.stdout.write(`created: ${outputPath}.meta\n`);
+  return { created: [outputPath, outputPath + '.meta'] };
 }
 
+function cmdCreatePrefab(argv) { return resourceCommand('create_prefab', argv, planCreatePrefab); }
 module.exports = { cmdCreatePrefab };

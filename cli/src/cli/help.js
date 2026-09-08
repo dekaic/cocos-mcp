@@ -36,10 +36,19 @@ Query options:
   --with-comps      tree/node 下展开组件字段（输出 components: [{type,id,fields}]）
 
 Batch options:
-  --project-root <path>  指定含 assets/+package.json 的项目根；
-                         当 prefab 放在 /tmp/ 等非项目目录时必须显式传入，
-                         否则 className → classId 自动规范化会抛错（避免写入 className 字符串导致 cocos MissingScript）。
-  --dry-run              不写盘，输出会改的字段 diff（{ path: [old, new] } 形式）。
+  --project-root <path>  指定含 assets/+package.json 的真实项目根；不允许目标逃出该项目。
+  --operation-id <id>    所有正式写入、open 和 build 必填。重试查询同一 ID，不盲目重放。
+  --dry-run              不写目标资源；在线可用，正式执行会重新规划，不保证相同差异。
+                         正式离线写入需要 Creator 已关闭。glob 每文件独立事务，失败停止后续。
+
+Recovery (project and IDs are explicit):
+  operation-status --project-root <path> [--operation-id <id>]
+  operation-reconcile --project-root <path> --operation-id <id>
+                      --outcome accept_current_state --evidence <caller-report>
+  offline-recover --project-root <path> --transaction-id <id>
+                  [--apply --operation-id <recovery-id>]
+  恢复默认预演，实际恢复要求 Creator 关闭；调用方文字不能替代机器停止证据。
+  unknown 冻结普通写入；不能删状态目录或换 ID 绕过。不承诺多文件同时可见。
 
 Supported ops:
   set-position / set-label-text / set-sprite-frame / set-active / rename-node
@@ -83,8 +92,8 @@ Examples:
   cocos-mcp-cli query HomeUI.prefab --selector tree --with-comps
   cocos-mcp-cli query HomeUI.prefab --selector field --name itemList \\
                 --comp cc.UITransform --field _anchorPoint
-  cocos-mcp-cli set   HomeUI.prefab btnClose label.text "关闭"
-  cocos-mcp-cli batch HomeUI.prefab ops.json
+  cocos-mcp-cli set   HomeUI.prefab btnClose label.text "关闭" --operation-id label-001
+  cocos-mcp-cli batch HomeUI.prefab ops.json --operation-id batch-001
   cocos-mcp-cli batch HomeUI.prefab ops.json --dry-run
 `);
 }

@@ -37,9 +37,9 @@ Claude Code / MCP agent
                 └── preview_query_url / preview_refresh_and_reload
 ```
 
-**offline tools**：读写本地 `.prefab` 文件，不需要编辑器在线。适合批量、自动化场景。
+**offline tools**：查询与预演可在线，正式写入必须关闭目标 Creator、带 operationId，并通过项目内事务提交。详见 [执行契约](./execution-contract.md)。
 
-**editor tools**：通过 HTTP 与运行中的 Cocos Creator 编辑器通信（扩展监听固定端口）。可以操作运行时场景、触发资源重新导入、查询预览 URL、刷新预览。需要编辑器已启动且扩展已加载。
+**editor tools**：通过需认证的本机 HTTP 与 Creator 通信，端口动态发现。调用带 `_target: { projectPath, instanceId }`，副作用另带 operationId；展示别名和旧 URL 不授权执行。
 
 预览页面截图、点击和 JS 执行属于浏览器验证范畴：先用 `preview_query_url` 取得 URL，再交给 Playwright / Chrome 打开真实页面。
 
@@ -66,13 +66,13 @@ Claude Code / MCP agent
 
 ## offline 改完后的操作流程
 
-直接改 `.prefab` 文件后，编辑器需要重新加载才能感知变化。有两种方式：
+先预演，明确关闭目标 Creator，再以新的逻辑操作 ID 正式执行。预演不绑定正式差异或 UUID。成功提交后重开 Creator、重新发现并绑定新实例，然后验证导入；必要时使用以下刷新入口。
 
 ### 方式 A：仅重新导入资产
 
 ```
 editor tool: asset_reimport
-  参数: { "path": "assets/packages/game/home/ui/HomeUI.prefab" }
+  参数: { "url": "db://assets/packages/game/home/ui/HomeUI.prefab", "_target": { "projectPath": "/absolute/project", "instanceId": "实际新实例" }, "operationId": "reimport-001" }
 ```
 
 让编辑器重建该 prefab 的内部索引（UUID 映射、子资产列表）。适合只改了 prefab 内容、不涉及其他资产变动的情况。
@@ -85,7 +85,7 @@ editor tool: preview_refresh_and_reload
 
 触发编辑器重新加载所有修改过的资产并刷新预览。改动多个文件时用此方式，避免缓存不一致。
 
-**重要**：offline 改完不做 reimport，编辑器下次保存 prefab 时可能用旧的序列化数据覆盖你的修改。
+**重要**：不允许 Creator 持有旧内存时进行离线正式写入。unknown 时停止普通修改，查询原操作或预演恢复，不能换 ID 重试或手工删状态。
 
 ---
 
@@ -96,7 +96,7 @@ editor tool: preview_refresh_and_reload
 嵌套 prefab 的 stub 节点在父 prefab 中通常只有五个字段（`__type__`、`_objFlags`、`_parent`、`_prefab`、`__editorExtras__`），其余属性全在 `cc.PrefabInstance.propertyOverrides` 里。直接改 stub 节点的 `_lpos` 或 `_active` 字段，编辑器加载时会用 propertyOverrides 覆盖回去，修改静默丢失。
 
 → offline 工具已自动处理：检测到 stub 节点时自动路由到 propertyOverrides 写入。
-→ 手写 ops.json 绕过高层 API 时，必须自己判断 `instance !== null` 再决定写哪里。
+→ ops.json 也必须交给受控高层 API 执行，不直接写序列化资源。
 → 详见 [prefab-schema.md § 4](./prefab-schema.md)。
 
 ### 坑 2：nestedPrefabInstanceRoots 不同步导致静默数据损坏
@@ -104,7 +104,7 @@ editor tool: preview_refresh_and_reload
 根节点 `cc.PrefabInfo.nestedPrefabInstanceRoots` 是 CC3 编辑器识别所有嵌套 prefab stub 的总索引。新增嵌套实例时如果忘记把 stub 节点引用加进这个数组，编辑器不会报错，但在下次保存 prefab 时会把嵌套引用关系覆盖掉，造成子组件引用丢失。
 
 → offline 工具的 `editPrefab` 路径已自动维护该列表。
-→ 手动拼 op 绕过高层 API 时必须自己维护。
+→ 不绕过高层 API 手工维护该数组；工具覆盖不足时保留复现并报告缺口。
 → 详见 [prefab-schema.md § 4 坑二](./prefab-schema.md) 和 cli/README.md 地雷二。
 
 ### 坑 3：stub 内部节点或组件字段必须走 nested override

@@ -19,13 +19,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resourceCommand } = require('./resource-command');
 
 function die(msg) {
-  process.stderr.write('Error: ' + msg + '\n');
-  process.exit(1);
+  throw new Error(msg);
 }
 
-function cmdCompactPrefab(argv) {
+function planCompactPrefab(argv, plan) {
   let prefabPath = null;
   let dryRun = false;
 
@@ -44,14 +44,14 @@ function cmdCompactPrefab(argv) {
 
   if (!prefabPath) die('需要 <prefab> 路径参数');
 
-  compactOne(prefabPath, dryRun);
+  return compactOne(prefabPath, dryRun, plan);
 }
 
-function compactOne(prefabPath, dryRun) {
+function compactOne(prefabPath, dryRun, plan) {
   const abs = path.resolve(process.cwd(), prefabPath);
   if (!fs.existsSync(abs)) die(`prefab 不存在: ${prefabPath}`);
 
-  const raw = fs.readFileSync(abs, 'utf8');
+  const raw = plan.read(abs);
   let data;
   try {
     data = JSON.parse(raw);
@@ -104,10 +104,8 @@ function compactOne(prefabPath, dryRun) {
     if (danglingDetails.length > 5) process.stderr.write(`   ... 共 ${danglingDetails.length} 处\n`);
   }
 
-  if (dryRun) return;
-
-  fs.writeFileSync(abs, JSON.stringify(newData, null, 2) + '\n', 'utf8');
-  process.stdout.write(`  ✓ 写入 ${prefabPath}\n`);
+  plan.write(abs, JSON.stringify(newData, null, 2) + '\n');
+  return { compacted: prefabPath, removedSlots: nullIdxs.length };
 }
 
 function _remapIds(obj, map, location, dangling) {
@@ -133,4 +131,5 @@ function _remapIds(obj, map, location, dangling) {
   }
 }
 
+function cmdCompactPrefab(argv) { return resourceCommand('compact_prefab', argv, planCompactPrefab); }
 module.exports = { cmdCompactPrefab };

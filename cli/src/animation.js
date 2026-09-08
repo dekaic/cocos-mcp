@@ -2,6 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { readFile } = require('./runtime/plan');
+const { projectForFile, contained } = require('./runtime/identity');
+const { runOffline } = require('./runtime/transactions');
 const { ref } = require('./primitives.js');
 const {
   InterpolationMode,
@@ -30,7 +33,7 @@ const INTERPOLATIONS = Object.freeze({
 function parseAnimationClip(filePath) {
   let raw;
   try {
-    raw = fs.readFileSync(filePath, 'utf8');
+    raw = readFile(filePath, 'utf8');
   } catch (e) {
     throw new Error(`parseAnimationClip: 读取失败（${filePath}）: ${e.message}`);
   }
@@ -357,42 +360,26 @@ function buildAnimationElements(spec) {
   return elements;
 }
 
-function writeNewAnimationClip(filePath, elements) {
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    fs.writeFileSync(tempPath, JSON.stringify(elements, null, 2) + '\n', {
-      encoding: 'utf8',
-      flag: 'wx',
-    });
-    if (fs.existsSync(filePath)) {
-      throw new Error(`目标文件已存在: ${filePath}`);
-    }
-    fs.renameSync(tempPath, filePath);
-  } catch (e) {
-    try { fs.unlinkSync(tempPath); } catch (_) {}
-    throw e;
-  }
-}
-
-function createAnimationClip(filePath, clipSpec) {
+function createAnimationClip(filePath, clipSpec, options = {}) {
   if (typeof filePath !== 'string' || path.extname(filePath).toLowerCase() !== '.anim') {
     throw new Error('createAnimationClip: filePath 必须以 .anim 结尾');
-  }
-  if (fs.existsSync(filePath)) {
-    throw new Error(`createAnimationClip: 目标文件已存在: ${filePath}`);
   }
   const parent = path.dirname(filePath);
   if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
     throw new Error(`createAnimationClip: 父目录不存在: ${parent}`);
   }
 
+  const projectRoot = projectForFile(filePath, options.projectRoot);
+  filePath = contained(projectRoot, filePath);
+  return runOffline(projectRoot, 'animation_create', { filePath, clip: clipSpec }, options, plan => {
   const normalized = normalizeCreateSpec(clipSpec);
-  writeNewAnimationClip(filePath, buildAnimationElements(normalized));
+  plan.write(filePath, JSON.stringify(buildAnimationElements(normalized), null, 2) + '\n', { create: true });
   return {
     created: true,
     filePath,
     clip: queryAnimationClip(filePath),
   };
+  });
 }
 
 module.exports = {

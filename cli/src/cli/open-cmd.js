@@ -4,6 +4,10 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { resolveCocosExec } = require('./cocos-path.js');
+const { executeLifecycle } = require('../runtime/lifecycle');
+const { unwrap } = require('../runtime/transactions');
+const { waitReady } = require('../runtime/readiness');
+const { assertClosed } = require('../runtime/processes');
 
 function die(msg) {
     process.stderr.write('Error: ' + msg + '\n');
@@ -21,6 +25,7 @@ function parseArgs(rest) {
         else if (k === '--wait') a.wait = true;
         else if (k === '--no-login' || k === '--nologin') a.noLogin = true;
         else if (k === '--with-login') a.noLogin = false;
+        else if (k === '--operation-id') a.operationId = rest[++i];
         else if (!a.project && k[0] !== '-') a.project = k;
         else die('unknown argument "' + k + '". See cocos-mcp-cli open --help');
     }
@@ -33,7 +38,7 @@ function buildOpenArgs(projectPath, opts) {
     return args;
 }
 
-function cmdOpen(rest) {
+async function cmdOpen(rest) {
     if (rest[0] === '--help' || rest[0] === '-h') {
         process.stdout.write(
             'cocos-mcp-cli open - open a Cocos Creator project\n\n' +
@@ -48,6 +53,7 @@ function cmdOpen(rest) {
             '  --with-login           Do not add --nologin.\n' +
             '  --wait                 Wait for the Cocos process to exit instead of detaching.\n' +
             '  --dry-run              Print the command without launching.\n'
+            + '  --operation-id <id>    Required for launch; retries query the original operation.\n'
         );
         return;
     }
@@ -73,17 +79,24 @@ function cmdOpen(rest) {
         return;
     }
 
-    process.stdout.write('Opening Cocos project:\n  ' + a.project + '\n');
+    let childExit;
+    const record = await executeLifecycle('cli_open', { projectPath: a.project, operationId: a.operationId, execPath: cocos, noLogin: a.noLogin }, {
+        assertTarget: () => assertClosed(a.project),
+    }, async entry => {
     const child = spawn(cocos, argv, {
         stdio: a.wait ? 'inherit' : 'ignore',
         detached: !a.wait,
     });
-    child.on('error', function (e) { die('failed to start Cocos Creator: ' + e.message); });
-    if (a.wait) {
-        child.on('exit', function (code) { process.exit(code == null ? 1 : code); });
-    } else {
-        child.unref();
-    }
+    childExit = new Promise(resolve => child.once('exit', resolve));
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    const owner = entry.child(child.pid);
+    if (!a.wait) child.unref();
+    const ready = await waitReady(a.project, { processIdentity: owner });
+    if (!ready.ready) throw new Error(ready.reason);
+    return { action: 'open', ready };
+    });
+    process.stdout.write(JSON.stringify(unwrap(record), null, 2) + '\n');
+    if (a.wait && childExit) process.exitCode = (await childExit) || 0;
 }
 
 module.exports = { cmdOpen, parseArgs, buildOpenArgs };

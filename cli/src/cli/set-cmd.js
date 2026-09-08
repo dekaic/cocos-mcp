@@ -9,7 +9,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parsePrefab } = require('../parse.js');
 const { editPrefab } = require('../editor/index.js');
 const { parseFlags } = require('./flags.js');
 
@@ -23,7 +22,8 @@ function resolvePath(p) {
 }
 
 function cmdSet(args) {
-  const { positional } = parseFlags(args);
+  const { positional, flags } = parseFlags(args);
+  for (const name of Object.keys(flags)) if (!['operation-id', 'project-root', 'dry-run'].includes(name)) die('set: unknown flag --' + name);
 
   const [prefabArg, nodeName, field, rawValue] = positional;
   if (!prefabArg) die('set: 必须提供 <prefab>');
@@ -35,6 +35,7 @@ function cmdSet(args) {
   if (!fs.existsSync(prefabPath)) die(`set: 文件不存在: ${prefabPath}`);
 
   let op;
+  let prepareOps;
 
   if (field === 'active') {
     if (rawValue !== 'true' && rawValue !== 'false') {
@@ -47,15 +48,15 @@ function cmdSet(args) {
 
   } else if (field === 'position.x' || field === 'position.y' || field === 'position.z') {
     const axis = field.split('.')[1];
-    const num = parseFloat(rawValue);
-    if (isNaN(num)) die(`set ${field}: value 必须是数字`);
-    const prefabData = parsePrefab(prefabPath);
-    const node = prefabData.findNodeByName(nodeName);
-    if (!node) die(`set: 找不到节点 "${nodeName}"`);
-    const lpos = node._lpos || { x: 0, y: 0, z: 0 };
-    const newPos = { x: lpos.x || 0, y: lpos.y || 0, z: lpos.z || 0 };
-    newPos[axis] = num;
-    op = { op: 'set-position', node: nodeName, x: newPos.x, y: newPos.y, z: newPos.z };
+    const num = Number(rawValue);
+    if (!Number.isFinite(num)) die(`set ${field}: value 必须是数字`);
+    op = { op: 'set-position', node: nodeName, x: 0, y: 0, z: 0 };
+    prepareOps = prefabData => {
+      const node = prefabData.findNodeByName(nodeName);
+      if (!node) throw new Error(`set: 找不到节点 "${nodeName}"`);
+      const lpos = node._lpos || {};
+      return [{ ...op, x: lpos.x || 0, y: lpos.y || 0, z: lpos.z || 0, [axis]: num }];
+    };
 
   } else {
     die(
@@ -68,9 +69,11 @@ function cmdSet(args) {
 
   let result;
   try {
-    result = editPrefab(prefabPath, [op]);
+    result = editPrefab(prefabPath, [op], { operationId: flags['operation-id'], dryRun: flags['dry-run'] === true,
+      projectRoot: flags['project-root'] && resolvePath(flags['project-root']), tool: 'prefab_set',
+      logicalArgs: { filePath: prefabPath, nodeName, field, rawValue }, prepareOps });
   } catch (e) {
-    die('set 失败: ' + e.message);
+    throw e;
   }
 
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');

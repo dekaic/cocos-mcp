@@ -2,9 +2,14 @@
 
 var fs = require('fs');
 var path = require('path');
-var { exec } = require('child_process');
+var { execFile, execFileSync } = require('child_process');
 var runtimeIdentity = require('./server/runtime-identity');
 var packageReload = require('./server/package-reload');
+var registry = require('./cli/src/runtime/registry');
+var operationStore = require('./cli/src/runtime/operations').createStore();
+var execution = require('./server/execution');
+var storage = require('./cli/src/runtime/storage');
+var _reloadEntry = null;
 
 var _runtimeIdentity = runtimeIdentity.createRuntimeIdentity(__dirname);
 
@@ -16,6 +21,7 @@ var _previewUrl = '';
 var _infoInterval = null;
 // `.dev/refresh` 命令文件 watcher（唯一保留的 watcher）
 var _refreshWatcher = null;
+var _refreshDebounceTimer = null;
 
 // dev-reload-info.json 输出路径（被 listWorktrees / getStatus / panel 读取，必须保留）
 var INFO_FILE = '.dev/dev-reload-info.json';
@@ -186,14 +192,10 @@ exports.methods = {
             toolCount: _mcpServer.toolCount,
             resourceCount: _mcpServer.resourceCount,
             stats: _mcpServer.stats,
-            // Claude Code 的 mcp add 命令
-            cliAddCommand: 'claude mcp add cocos --transport http ' + url,
-            // JSON 配置片段
-            jsonConfig: {
-                mcpServers: {
-                    cocos: { transport: 'http', url: url },
-                },
-            },
+            migrationRequired: true,
+            connectionPolicy: 'Authenticated generation-bound Router only; old direct URL clients must migrate.',
+            cliAddCommand: 'Use the verified local Router entry; do not configure an unauthenticated HTTP URL.',
+            jsonConfig: null,
         };
     },
     /** Panel 使用：刷新资源 + 重载场景 */
@@ -209,12 +211,12 @@ exports.methods = {
         return true;
     },
     /** Panel 使用：打开 .dev 目录 */
-    openDevDir() {
+    async openDevDir() {
         var devDir = path.join(Editor.Project.path, DEV_DIR);
         if (!fs.existsSync(devDir)) fs.mkdirSync(devDir, { recursive: true });
         // 跨平台在系统文件管理器打开：mac=open / win=explorer / linux=xdg-open
         var opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open';
-        exec(opener + ' "' + devDir + '"');
+        await new Promise((resolve, reject) => execFile(opener, [devDir], error => error ? reject(error) : resolve()));
         return devDir;
     },
     /** Panel 使用：只做场景软重载 */
@@ -259,7 +261,7 @@ exports.methods = {
         } catch (e) { /* ignore */ }
         // 再扫 worktree：`git worktree list` 输出的路径
         try {
-            var wtOut = require('child_process').execSync('git -C "' + cur + '" worktree list --porcelain', { encoding: 'utf-8' });
+            var wtOut = execFileSync('git', ['-C', cur, 'worktree', 'list', '--porcelain'], { encoding: 'utf-8' });
             wtOut.split('\n').forEach(function (line) {
                 if (line.indexOf('worktree ') === 0) {
                     var p = line.substring('worktree '.length).trim();
@@ -308,16 +310,17 @@ exports.methods = {
         // git 分支/commit
         var gitBranch = '', gitHead = '';
         try {
-            var execSync = require('child_process').execSync;
-            gitBranch = execSync('git -C "' + Editor.Project.path + '" rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
-            gitHead = execSync('git -C "' + Editor.Project.path + '" rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
+            gitBranch = execFileSync('git', ['-C', Editor.Project.path, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+            gitHead = execFileSync('git', ['-C', Editor.Project.path, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         } catch (e) { /* ignore */ }
         return {
             previewUrl: url,
             previewPort: portMatch ? parseInt(portMatch[1], 10) : null,
             editorPid: process.pid,
+            instanceId: _registration && _registration.instanceId,
+            processIdentity: _registration && _registration.owner,
             editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
-            projectPath: Editor.Project.path,
+            projectPath: _registration ? _registration.projectPath : Editor.Project.path,
             updatedAt: updatedAt,
             infoFile: INFO_FILE,
             watchers: {
@@ -343,8 +346,8 @@ exports.methods = {
 // ── MCP Server ──
 
 var _mcpServer = null;
+var _registration = null;
 var MCP_DEFAULT_PORT = 7523;
-var REGISTRY_DIR = path.join(require('os').homedir(), '.cocos-mcp', 'editors');
 var SDK_PATH = path.join(__dirname, 'mcp-sdk', 'index.js');
 
 /**
@@ -383,14 +386,12 @@ function getEditorExecPath() {
 function writeRegistry() {
     if (!_mcpServer || !_mcpServer.started) return;
     try {
-        if (!fs.existsSync(REGISTRY_DIR)) fs.mkdirSync(REGISTRY_DIR, { recursive: true });
         var entry = {
             pid: process.pid,
             projectPath: Editor.Project.path,
             projectShortName: getProjectShortName(),
             host: _mcpServer.host,
             port: _mcpServer.port,
-            url: 'http://' + _mcpServer.host + ':' + _mcpServer.port + '/mcp',
             editorVersion: (Editor.App && Editor.App.version) ? Editor.App.version : '',
             execPath: getEditorExecPath(),
             startedAt: _mcpServer.stats.startedAt,
@@ -402,7 +403,7 @@ function writeRegistry() {
             toolSchemaHash: _runtimeIdentity.toolSchemaHash,
             loadedAt: _runtimeIdentity.loadedAt,
         };
-        fs.writeFileSync(path.join(REGISTRY_DIR, process.pid + '.json'), JSON.stringify(entry, null, 2), 'utf-8');
+        _registration.publish(entry);
     } catch (e) {
         console.warn('[cc-mcp] writeRegistry failed:', e.message || e);
     }
@@ -410,8 +411,7 @@ function writeRegistry() {
 
 function removeRegistry() {
     try {
-        var f = path.join(REGISTRY_DIR, process.pid + '.json');
-        if (fs.existsSync(f)) fs.unlinkSync(f);
+        if (_registration) _registration.remove();
     } catch (e) { /* ignore */ }
 }
 
@@ -421,8 +421,9 @@ async function startMcpServer() {
 
     // ── 使用 mcp-sdk ──────────────────────────────────────────────
     var tdef = require('./server/tools');
+    _registration = registry.createRegistration(Editor.Project.path);
     var ctx = buildToolCtx();
-    var toolDefs = tdef.defineTools(ctx);
+    var toolDefs = execution.wrapTools(tdef.defineTools(ctx), _registration, operationStore);
     var resourceDefs = tdef.defineResources(ctx);
     _runtimeIdentity.toolSchemaHash = runtimeIdentity.hashToolSchemas(toolDefs);
 
@@ -443,13 +444,11 @@ async function startMcpServer() {
         name: 'cocos-mcp',
         version: '2.1.0',
         port: MCP_DEFAULT_PORT,
+        bearerToken: _registration.token,
+        allowedOrigins: [],
+        maxBodyBytes: 8 * 1024 * 1024,
         tools: toolDefs.map(function (t) {
-            return {
-                name: t.name,
-                description: t.description,
-                inputSchema: t.inputSchema,
-                handler: countCall(t.name, t.handler),
-            };
+            return Object.assign({}, t, { handler: countCall(t.name, t.handler) });
         }),
         resources: resourceDefs.map(function (r) {
             return {
@@ -507,6 +506,7 @@ function buildToolCtx() {
 
 async function stopMcpServer() {
     if (!_mcpServer) return;
+    if (_registration) _registration.active = false;
     removeRegistry();
     if (_mcpServer.stop) {
         try { await _mcpServer.stop(); } catch (e) { /* ignore */ }
@@ -535,28 +535,46 @@ async function doOpenPrefab(urlOrPath) {
 }
 
 /** 通过 Creator 自带的扩展管理器重新加载指定插件；name 缺省为本插件 cocos-mcp。
- *  注意：reload 本插件自身时，本函数处于即将被卸载的 main.js 上下文，必须 fire-and-forget。
+ *  HTTP 派发先返回非终态；实际执行上下文继续持锁，直至交接和新运行身份核验完成。
  *  不能只调用 Editor.Package.disable → enable：Creator 会复用旧的 CommonJS 模块对象，
  *  生命周期会重启，但改动后的 JS 与 loadedAt 不会更新。扩展管理器的 reload 消息会执行
  *  Creator 自己的完整刷新流程。
  */
-function doRestartSelf(name) {
+async function doRestartSelf(name) {
     name = name || 'cocos-mcp';
-    log('restart-package: scheduling Extension Manager reload for ' + name);
-    setImmediate(function () {
-        Promise.resolve()
-            .then(function () {
-                return packageReload.resolvePackagePath(Editor.Package, name);
-            })
-            .then(function (pkgPath) {
-                var removed = packageReload.purgePackageRequireCache(pkgPath);
-                log('restart-package: purged ' + removed.length + ' cached module(s) under ' + pkgPath);
-                return Editor.Message.request('extension', 'reload', pkgPath);
-            })
-            .catch(function (err) {
-                console.error('[restart-package] failed:', err && (err.stack || err.message) || err);
-            });
-    });
+    const entry = execution.currentExecution();
+    if (!entry) throw new Error('Reload requires a claimed operation and project execution lock');
+    const pkgPath = packageReload.resolvePackagePath(Editor.Package, name);
+    const selfReload = fs.realpathSync(pkgPath) === fs.realpathSync(__dirname);
+    const oldRegistration = _registration;
+    const expected = selfReload ? runtimeIdentity.createRuntimeIdentity(__dirname) : null;
+    const handoff = { packageName: name, packagePath: pkgPath, oldInstanceId: oldRegistration.instanceId,
+        oldLoadedAt: _runtimeIdentity.loadedAt, expectedRuntime: expected };
+    storage.publish(path.join(entry.directory, 'handoff.json'), handoff);
+    if (selfReload) _reloadEntry = entry;
+    packageReload.purgePackageRequireCache(pkgPath);
+    await Editor.Message.request('extension', 'reload', pkgPath);
+    if (!selfReload) return { packageName: name, completionEvidence: 'Extension Manager reload request completed' };
+    const stopped = storage.read(path.join(entry.directory, 'service-stopped.json'));
+    if (!stopped || stopped.instanceId !== oldRegistration.instanceId) throw new Error('Old service stop handoff is missing');
+    const next = registry.readRegistry().filter(record => record.projectPath === oldRegistration.projectPath &&
+        record.instanceId !== oldRegistration.instanceId && record.pid === oldRegistration.owner.pid &&
+        record.processIdentity.startId === oldRegistration.owner.startId);
+    if (next.length !== 1) throw new Error('New service generation cannot be uniquely verified');
+    const fresh = next[0];
+    const client = require('./cli/src/runtime/http-client').createClient(fresh);
+    const response = await client.request('tools/call', { name: 'local_get_status', arguments: { _target: client.target } });
+    if (!response.result || response.result.isError) throw new Error('New service identity query failed');
+    const status = response.result.structuredContent || JSON.parse(response.result.content[0].text);
+    const actual = status.extensionRuntime;
+    if (status.instanceId !== fresh.instanceId || !actual || actual.loadedAt === handoff.oldLoadedAt ||
+        actual.runtimeBuildId !== expected.runtimeBuildId || actual.sourceRealPath !== expected.sourceRealPath ||
+        actual.sourceGitHead !== expected.sourceGitHead || actual.toolSchemaHash !== fresh.toolSchemaHash) {
+        throw new Error('Reload runtime/schema identity has not been verified');
+    }
+    storage.publish(path.join(entry.directory, 'handoff-completed.json'), { oldInstanceId: oldRegistration.instanceId,
+        newInstanceId: fresh.instanceId, runtime: actual, processIdentity: fresh.processIdentity });
+    return { instanceId: fresh.instanceId, runtime: actual, completionEvidence: 'Old service stopped and new authenticated runtime verified' };
 }
 
 /**
@@ -568,13 +586,15 @@ function doRestartSelf(name) {
  */
 async function handleRefreshCommand(cmd) {
     if (!cmd) return;
-    pushCommandLog('refresh', cmd);
-    var parts = cmd.split(/\s+/);
-    if (parts[0] === 'restart-package') {
-        doRestartSelf(parts[1]);   // parts[1] 可选：缺省重启自身，指定则 reload 该扩展
-        return;
-    }
-    log('refresh: unknown command — ' + cmd + '（仅支持 restart-package [name]）');
+    let request;
+    try { request = JSON.parse(cmd); } catch (_) { throw new Error('MIGRATION_REQUIRED: refresh commands must be JSON with operationId, _target and name; legacy text commands cannot write'); }
+    const definition = execution.wrapTools(require('./server/tools').defineTools(buildToolCtx()), _registration, operationStore)
+        .find(tool => tool.name === 'local_reload_package');
+    const invalid = require('./mcp-sdk/protocol/dispatcher').validateArguments(definition.inputSchema, request);
+    if (invalid) throw new Error('INVALID_ARGUMENTS: ' + invalid);
+    const response = await definition.handler(request);
+    if (response.isError) console.error('[refresh]', JSON.stringify(response.structuredContent));
+    else pushCommandLog('refresh', 'operation ' + request.operationId);
 }
 
 /** 启动 .dev/refresh 文件 watcher（写入命令 → 读取 → 执行 → 清空） */
@@ -585,13 +605,12 @@ function startRefreshWatcher() {
     if (!fs.existsSync(filePath)) {
         try { fs.writeFileSync(filePath, '', 'utf-8'); } catch (e) { /* ignore */ }
     }
-    var _debounceTimer = null;
     try {
         _refreshWatcher = fs.watch(filePath, function (event) {
             if (event !== 'change' && event !== 'rename') return;
             // debounce：macOS 下单次 write 可能触发多次事件
-            clearTimeout(_debounceTimer);
-            _debounceTimer = setTimeout(function () {
+            clearTimeout(_refreshDebounceTimer);
+            _refreshDebounceTimer = setTimeout(function () {
                 var content = '';
                 try { content = fs.readFileSync(filePath, 'utf-8').trim(); } catch (e) { return; }
                 if (!content) return;
@@ -601,7 +620,7 @@ function startRefreshWatcher() {
                 // 逐条串行执行（前一条完成再执行下一条）
                 lines.reduce(function (chain, line) {
                     return chain.then(function () { return handleRefreshCommand(line.trim()); });
-                }, Promise.resolve());
+                }, Promise.resolve()).catch(function (error) { console.error('[refresh] ' + error.message); });
             }, 80);
         });
         log('refresh watcher started → ' + REFRESH_FILE);
@@ -612,8 +631,20 @@ function startRefreshWatcher() {
 
 /** 停止 .dev/refresh 文件 watcher */
 function stopRefreshWatcher() {
+    clearTimeout(_refreshDebounceTimer);
+    _refreshDebounceTimer = null;
     if (_refreshWatcher) { try { _refreshWatcher.close(); } catch (e) { /* ignore */ } _refreshWatcher = null; }
 }
+
+// Panel and Editor.Message entry points use the same executor; nested tool calls keep their execution context.
+['refreshAssets', 'triggerRefresh', 'triggerReimport', 'softReloadScene', 'cleanDevDir', 'restartServer', 'openDevDir'].forEach(function (name) {
+    const handler = exports.methods[name];
+    exports.methods[name] = function () {
+        if (!_registration) throw new Error('MCP service identity is unavailable; write operation rejected');
+        const args = Array.from(arguments);
+        return execution.runLocal('panel_' + name, _registration, operationStore, () => handler.apply(this, args), { args });
+    };
+});
 
 // ── 插件生命周期 ──
 
@@ -635,7 +666,7 @@ exports.load = async function () {
         startInfoInterval();
     });
     // 启动 MCP server（失败打完整栈，不阻断扩展 load）
-    startMcpServer().catch(function(e) {
+    await startMcpServer().catch(function(e) {
         console.error('[cc-mcp] MCP server failed to start:', e && (e.stack || e.message) || e);
     });
 };
@@ -644,5 +675,7 @@ exports.unload = async function () {
     stopRefreshWatcher();
     stopInfoInterval();
     await stopMcpServer();
+    if (_reloadEntry) storage.publish(path.join(_reloadEntry.directory, 'service-stopped.json'), {
+        instanceId: _registration.instanceId, owner: _registration.owner, stoppedAt: new Date().toISOString() });
     log('unloaded');
 };

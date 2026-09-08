@@ -14,7 +14,8 @@ const {
   makeUITransform,
 } = require('../src/primitives.js');
 
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-cli-fixture-'));
+const projectRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-cli-fixture-')));
+const store = require('../src/runtime/operations').createStore({ stateRoot: path.join(projectRoot, 'private-state') });
 const assetsDir = path.join(projectRoot, 'assets');
 const scriptsDir = path.join(assetsDir, 'scripts');
 const fixturePath = path.join(assetsDir, 'HomeUI.prefab');
@@ -144,6 +145,7 @@ process.once('exit', function () {
 });
 
 module.exports = {
+  store,
   fixturePath,
   nestedChildFileId: NESTED_CHILD_FILE_ID,
   projectRoot,

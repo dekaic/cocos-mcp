@@ -25,13 +25,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resourceCommand } = require('./resource-command');
 const { deterministicUUID } = require('../id.js');
 const { parsePrefab } = require('../parse.js');
 const { resolveNode } = require('../editor/helpers.js');
 
 function die(msg) {
-  process.stderr.write('Error: ' + msg + '\n');
-  process.exit(1);
+  throw new Error(msg);
 }
 
 function parseSelector(raw) {
@@ -45,7 +45,7 @@ function parseSelector(raw) {
   return t;
 }
 
-function cmdExtractPrefab(argv) {
+function planExtractPrefab(argv, plan) {
   let srcPath = null;
   let outPath = null;
   let nodeSelector = null;
@@ -162,6 +162,9 @@ function cmdExtractPrefab(argv) {
     userData: { syncNodeName: newName },
   };
 
+  const outAbs = path.resolve(process.cwd(), outPath);
+  plan.write(outAbs, JSON.stringify(newData, null, 2) + '\n', { create: true });
+  plan.write(outAbs + '.meta', JSON.stringify(meta, null, 2) + '\n', { create: true });
   if (dryRun) {
     process.stdout.write('=== PREFAB ===\n');
     process.stdout.write(JSON.stringify(newData, null, 2) + '\n');
@@ -171,15 +174,7 @@ function cmdExtractPrefab(argv) {
     return;
   }
 
-  const outAbs = path.resolve(process.cwd(), outPath);
-  const dir = path.dirname(outAbs);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  fs.writeFileSync(outAbs, JSON.stringify(newData, null, 2) + '\n', 'utf8');
-  fs.writeFileSync(outAbs + '.meta', JSON.stringify(meta, null, 2) + '\n', 'utf8');
-
-  process.stdout.write(`created: ${outPath} (${collected.size} objects)\n`);
-  process.stdout.write(`created: ${outPath}.meta\n`);
+  return { created: [outPath, outPath + '.meta'], objects: collected.size };
 }
 
 // ── internals ────────────────────────────────────────────
@@ -235,4 +230,5 @@ function _remapIds(obj, map) {
   }
 }
 
+function cmdExtractPrefab(argv) { return resourceCommand('extract_prefab', argv, planExtractPrefab); }
 module.exports = { cmdExtractPrefab };

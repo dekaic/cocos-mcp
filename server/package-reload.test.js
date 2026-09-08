@@ -8,7 +8,7 @@ const {
     purgePackageRequireCache,
 } = require('./package-reload.js');
 
-test('resolvePackagePath accepts a path or resolves a package name', () => {
+test('resolvePackagePath requires a unique registered package, including path selectors', () => {
     const api = {
         getPackages: () => [
             { name: 'other', path: '/extensions/other' },
@@ -16,8 +16,11 @@ test('resolvePackagePath accepts a path or resolves a package name', () => {
         ],
     };
 
-    assert.equal(resolvePackagePath(api, '/tmp/custom-extension'), '/tmp/custom-extension');
+    assert.throws(() => resolvePackagePath(api, '/tmp/custom-extension'), /找不到扩展/);
+    assert.throws(() => resolvePackagePath(api, '/'), /找不到扩展/);
     assert.equal(resolvePackagePath(api, 'cocos-mcp'), '/project/extensions/cocos-mcp');
+    assert.equal(resolvePackagePath({ getPackages: () => [{ name: 'here', path: __dirname }] }, __dirname), __dirname);
+    assert.throws(() => resolvePackagePath({ getPackages: () => [{ name: 'x', path: '/one' }, { name: 'x', path: '/two' }] }, 'x'), /找不到扩展/);
     assert.throws(() => resolvePackagePath(api, 'missing'), /找不到扩展/);
 });
 

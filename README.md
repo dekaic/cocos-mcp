@@ -6,8 +6,8 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab / AnimationClip 工具�
 
 ## 版本状态
 
-- 现有稳定 tag：`v1.0.0`；它早于当前正式制品规范，GitHub Releases 尚无对应的自包含发布。`stable/v1.0` 仅作为 1.0 维护分支。
-- `main`：下一版本的未发布开发线；公开能力变化见 [`CHANGELOG.md`](./CHANGELOG.md)。
+- 最近已固化的正式版本为 `v2.1.0`；该版本的历史证据不覆盖当前修复工作树。
+- 当前身份、认证、操作追踪与事务修改记录在 `Unreleased`，尚未修改版本字段或发布。使用前先读 [执行与迁移契约](./doc/execution-contract.md)，不要用旧版本号判断当前工作树协议。
 - 历史 `test/*` 分支和 `*-test.*` tag 只保留实验记录，不作为稳定发布使用。
 
 ---
@@ -18,7 +18,8 @@ Cocos Creator 3.8.x 的 MCP 桥接扩展 + 离线 prefab / AnimationClip 工具�
 |---|---|---|
 | [`CHANGELOG.md`](./CHANGELOG.md) | 已发布和未发布的用户可见变化 | 判断升级影响时 |
 | [`RELEASING.md`](./RELEASING.md) | SemVer、制品、验证、tag 与发布规范 | 准备正式版本时 |
-| [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：多项目 MCP 绑定、HTTP fallback、预览 URL、CLI/MCP 分工 | agent 使用本插件前 |
+| [`AGENTS.md`](./AGENTS.md) | **Agent 使用规则**：精确实例绑定、认证、未知结果和 CLI/MCP 分工 | agent 使用本插件前 |
+| [`doc/execution-contract.md`](./doc/execution-contract.md) | 操作 ID、互斥、离线事务、恢复与客户端迁移 | 修改资源或迁移客户端前 |
 | [`QUICK-REF.md`](./QUICK-REF.md) | **一页速查表**：节点定位三式、场景 → op 对照、ops.json 速记、踩坑表 | agent 起手第一份，挑不到再翻 cli.md |
 | [`doc/cli.md`](./doc/cli.md) | **CLI 完整手册**：命令、35 个 op 全表、配方、已知坑、源码导航 | 改 `.prefab` / `.anim` 文件前必读 |
 | [`doc/prefab-schema.md`](./doc/prefab-schema.md) | CC3 prefab JSON 结构速查（节点 / 组件 / 引用字段格式） | 看不懂 prefab 字段时查 |
@@ -47,7 +48,7 @@ Claude Code (MCP client)
 main.js + server/tools.js         ← HTTP MCP 生命周期 + tool/resource 定义
 ```
 
-offline resource tools 在 router 进程内直接执行，调用 `cli/src/index.js`，不需要编辑器运行：
+offline resource tools 在 router 进程内调用 `cli/src/index.js`：查询和预演允许在线，正式写入要求目标 Creator 关闭：
 
 - prefab：`prefab_query` / `prefab_edit` / `prefab_batch`
 - AnimationClip：`animation_query` / `animation_create`
@@ -58,7 +59,7 @@ offline resource tools 在 router 进程内直接执行，调用 `cli/src/index.
 
 ### 1. 编辑器扩展（`main.js` + panel + server）
 
-在 Cocos Creator 编辑器进程内运行。`main.js` 使用 `mcp-sdk` 启动 HTTP MCP Server，`server/tools.js` 定义 tools/resources，并把实例地址、项目身份和当前加载的扩展运行身份写入 `~/.cocos-mcp/editors/<pid>.json`（心跳注册）。
+在 Cocos Creator 进程内运行。`main.js` 使用 `mcp-sdk` 启动仅本机、需认证的 HTTP Server；实例身份和私有凭据写入按进程启动身份摘要与 `instanceId` 隔离的注册文件。每次服务重启或扩展重载都产生新实例。
 
 **暴露的 tool 域**：
 
@@ -75,9 +76,10 @@ offline resource tools 在 router 进程内直接执行，调用 `cli/src/index.
 
 **职责**：
 
-- 扫描 `~/.cocos-mcp/editors/` 发现活跃编辑器（心跳超 120s 视为已死）
+- 扫描私有注册目录并通过进程启动身份、认证和实际 runtime 核验活实例；心跳时间不授权执行，也不单独证明死亡
 - 每隔 15s 自动发现新实例
 - 给每个编辑器的 tool 加 `<shortName>__` 前缀，合并后暴露给 Claude Code
+- 全局分配展示别名，按完整工具名精确映射；调用同时校验 `_target`，不按前缀猜实例
 - 内置 offline prefab 与 AnimationClip tools，不带前缀，全局可用
 
 **tool 路由示例**：
@@ -90,7 +92,7 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 ### 3. cocos-mcp-cli（`cli/`）
 
-零依赖 Node CLI，直接读写 `.prefab` 文件，无需 Cocos 编辑器运行。详见 [`doc/cli.md`](./doc/cli.md)。
+零新增依赖 Node CLI，通过共享事务核心读写资源；正式写入需要 operationId、项目内路径及已关闭的 Creator。详见 [`doc/cli.md`](./doc/cli.md)。
 
 ---
 
@@ -174,18 +176,20 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 | `local_list_worktrees` | 列出同机所有 worktree |
 | `local_open_dev_dir` | 在 Finder 中打开 .dev 目录 |
 | `local_clean_dev_dir` | 清理 .dev 临时文件 |
-| `local_reload_package` | 清除目标扩展自身的模块缓存并调度 Creator Extension Manager reload；返回 `state=scheduled`、`completionObserved=false` 和重载前 identity |
-| `meta_fix` | 基于 Git 对比修复特定图片 `.meta` 噪音；默认 `dryRun=true`，显式 `dryRun=false` 才写入 |
+| `local_reload_package` | 调度后返回 running／scheduled；交接、旧服务停止和新实例实际 identity 核验后才结案 |
+| `local_operation_status` | 查询指定历史操作；省略 ID 列出未解决项 |
+| `meta_fix` | Editor 内只预览图片 `.meta` 修复；正式修复使用关闭 Creator 后的 CLI |
 
 ### offline 域（router 级，无需编辑器运行）
 
 | Tool | 说明 |
 |---|---|
 | `prefab_query` | 查询 tree、node、find、field 或 overrides；tree/node 支持 `withComps` |
-| `prefab_edit` | 声明式批量编辑 prefab，所有 op 成功后一次性落盘 |
+| `prefab_edit` | 纯规划后事务提交资源与 `.meta`；`dryRun` 默认 false，正式执行需要 operationId |
 | `prefab_batch` | 从 JSON 文件读取 ops 后批量编辑 prefab |
 | `animation_query` | 查询 AnimationClip 的标准化轨道、通道、关键帧与只读 `events` 结构；无事件时返回空数组 |
 | `animation_create` | 创建 `UntypedTrack + RealCurve` 数值曲线 AnimationClip；拒绝覆盖已有文件 |
+| `offline_recover` | 指定事务的恢复，默认预演；实际恢复需要新恢复操作 ID 和已关闭的 Creator |
 
 完整 op 列表与配方见 [`doc/cli.md`](./doc/cli.md)。
 
@@ -195,22 +199,25 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 
 | Tool | 说明 |
 |---|---|
-| `router_list_editors` | 列出 router 当前发现的实例及项目、endpoint、runtime identity |
+| `router_list_editors` | 列出实例、真实项目、进程启动身份及 runtime identity，不输出凭据 |
+| `operation_status` | 查询单项历史操作，省略 ID 时列出未解决项 |
+| `operation_reconcile` | 机器核验停止后追加调用方处置；不改资源、不替代事务恢复 |
 | `editor_wait_ready` | 分层等待 process、registry、MCP 与 AssetDB API；`runtimeHealth` 当前明确为 `not_checked` |
-| `editor_spawn` | 在项目尚未运行时启动 Creator；同项目 spawn/restart 使用跨进程锁 |
+| `editor_spawn` | 在项目尚未运行时启动 Creator，与其他受控写入共享项目执行锁 |
 | `editor_restart` | 关闭并重新启动指定 Creator，然后等待分层就绪 |
-| `editor_kill` | 关闭指定 Creator，并清理对应注册记录 |
+| `editor_kill` | 关闭准确归属的 Creator；每代服务只清理自己的注册文件，未知归属记录保留 |
 
 ---
 
 ## 多开支持
 
-每个 Cocos 编辑器实例启动时向 `~/.cocos-mcp/editors/<pid>.json` 写入注册信息：
+每代服务发布私有、带格式版本的注册记录。Router 公开结果示意如下；认证信息不包含在内：
 
 ```json
 {
   "pid": 12345,
-  "url": "http://127.0.0.1:7788/mcp",
+  "instanceId": "<service-generation-uuid>",
+  "processIdentity": { "pid": 12345, "startId": "<os-process-start-identity>" },
   "shortName": "forest",
   "projectPath": "/path/to/project",
   "sourceRealPath": "/path/to/cocos-mcp",
@@ -222,9 +229,9 @@ prefab_query                   →  router 本地执行（cli），无需编辑�
 }
 ```
 
-HTTP Server 直接尝试 bind；遇到 `EADDRINUSE` 会递增端口重试，并在 bind 成功后才注册实际 endpoint。router 定期扫注册目录，心跳超过 120s 的记录视为死亡自动剔除。tool 名以 `<shortName>__` 为前缀隔离；`router_list_editors` 会透传运行身份，用于判断两个实例是否真的加载了同一份代码，而不是只比较 Git 工作树当前状态。
+HTTP Server 在 loopback 成功 bind 后才发布实际 endpoint；端口竞争会重试。Router 单次扫描、核验后原子发布完整快照，按完整对外定义计算 schema hash。心跳只作诊断，不能授权路由、证明死亡或解除锁。资源 URI 使用 instanceId，不依赖展示别名。
 
-direct HTTP 与 router 都会在调用 handler 或转发前检查 schema 顶层 `required` 字段，缺失时返回 `isError: true` 和包含 tool/参数名的错误。当前不执行完整 JSON Schema 类型、嵌套或条件校验；这些仍由具体 tool 处理。
+调用前检查 `_target`、副作用 operationId 以及声明的参数规则；格式／协议错误与业务工具错误分开。所有成功、控制和非终态结果都遵守 [执行契约](./doc/execution-contract.md)，不能把 HTTP 200 或 `isError:false` 单独当作操作完成。
 
 ---
 
@@ -248,25 +255,19 @@ claude mcp add cocos -- node /path/to/cocos-mcp/router/bin.js
 
 ## `.dev/refresh` 信号协议
 
-外部往 `<project>/.dev/refresh` 文件写一行命令，编辑器扩展的 watcher 读到后执行并清空文件。fire-and-forget，无返回值。
+旧的无身份文本信号已拒绝。文件入口只接受带准确 `_target`、operationId 和工具 arguments 的 JSON 请求，进入与 MCP 相同的执行包装器；不能借文件或面板绕开冻结。优先使用 MCP，并查询持久化操作结果。
 
-协议精简：**只支持 `restart-package`**——清除目标扩展目录内的 Node 模块缓存，再调度 Creator Extension Manager reload。资源刷新 / 场景重载 / 预览刷新都走 MCP tool（`preview_refresh_and_reload` / `asset_reimport` 等）或面板按钮；浏览器截图和交互验证交给 Playwright / Chrome。
-
-```bash
-echo "restart-package" > .dev/refresh
-```
-
-面板上的「重启 MCP Server」按钮只重启 HTTP server 实例，Node require 缓存不动，**不能证明 `main.js` 代码已重载**。`restart-package` 是无返回值的 fire-and-forget 信号；`local_reload_package` 会明确返回 `state: "scheduled"`、`completionObserved: false` 和 `runtimeIdentityBefore`，保留的 `ok` / `reloaded` 字段仅用于兼容旧调用。调用方应等待 router 重新发现实例，并比较新 registry/status 的 `loadedAt`；时间戳必须变化。`runtimeBuildId` 与 `toolSchemaHash` 只有在相应源码或 schema 改变时才应变化。
+面板「重启 MCP Server」产生新 instanceId，但不清 Node 模块缓存，不能证明源码重载。`local_reload_package` 的 scheduled 只代表调度；交接与新运行身份核验完成前操作保持非终态。修改 Router 或其加载的 CLI 后，还必须单独重启 stdio Router。
 
 ---
 
 ## 已知限制
 
 1. **多层嵌套组件引用**：CLI 已通过 `refSubNode` 字符串数组路径支持。极端深嵌套场景仍建议走 tools pipeline（`tools/step-3-script/bind-prefab-components.ts`）
-2. **offline 改完后需手动触发刷新**：直接写磁盘 Cocos 编辑器不会自动感知。改完后调用 `asset_reimport`（编辑器在线时）或 `preview_refresh_and_reload`，否则编辑器和预览页面看到的仍是旧内容
+2. **离线提交工作流**：关闭 Creator → 正式事务写入 → 重开 → 重新绑定实例 → 验证导入与预览；不允许保留旧编辑器内存同时进行离线正式写入
 3. **分页为兼容性 opt-in**：`asset_query_assets` 省略 `limit` 时仍返回全部匹配项；分页减少 MCP wire payload，但 Cocos AssetDB 仍先产生完整匹配数组
-4. **参数校验范围**：当前统一检查顶层 `required` 字段，不执行完整 JSON Schema 类型、嵌套或条件校验
-5. **扩展 reload 不可同步确认**：reload 会中断当前扩展自己的 MCP endpoint，所以 `local_reload_package` 只报告 scheduled；调用方必须从 router/registry 观察新 `loadedAt`
+4. **恢复边界**：不保证任意 Creator 工作跨崩溃恰好执行一次；unknown 冻结普通写入，资源恢复默认预演且不得覆盖检测到的外部修改
+5. **平台边界**：身份、权限和持久化能力需分别验证；缺少可靠机制时危险操作拒绝，不提供 PID-only、免认证或普通覆盖回退
 
 ---
 

@@ -32,13 +32,13 @@ function editPrefab(filePath, ops, options) {
   return editPrefabImpl(
     filePath,
     ops,
-    Object.assign({ projectRoot: PROJECT_ROOT }, options || {})
+    Object.assign({ projectRoot: PROJECT_ROOT, operationId: crypto.randomUUID(), store: require('./fixture-project').store }, options || {})
   );
 }
 
 // 每个测试独立 tmp 文件
 function makeTmp(tag) {
-  return path.join(os.tmpdir(), `HomeUI-api-${tag}-${Date.now()}.prefab`);
+  return path.join(PROJECT_ROOT, 'assets', `HomeUI-api-${tag}-${Date.now()}.prefab`);
 }
 
 // 把 fixture 复制到 tmp，返回 tmp 路径（让 editPrefab 可以写回）
@@ -512,7 +512,7 @@ test('remove-node: 普通节点 → 父 _children 不再含引用', () => {
 });
 
 test('remove-node: 兼容旧文档 node 字段', () => {
-  const tmp = path.join(os.tmpdir(), `remove-node-alias-${crypto.randomBytes(4).toString('hex')}.prefab`);
+  const tmp = path.join(PROJECT_ROOT, 'assets', `remove-node-alias-${crypto.randomBytes(4).toString('hex')}.prefab`);
   tmpFiles.push(tmp);
   const data = [
     { __type__: 'cc.Prefab', data: { __id__: 1 } },
@@ -585,7 +585,7 @@ test('remove-node: 删嵌套 stub → 清根 targetOverrides 中指向它的悬�
   // 最小 prefab：根(1) 挂一个嵌套 stub(2)，根 PrefabInfo 有两条 targetOverride——
   // _toStub 指向被删 stub(2)（应清），_keep target=null（应留）。
   // 复现 HomeUI fixture 缺失的场景：外层脚本对嵌套实例内部的引用 override。
-  const tmp = path.join(os.tmpdir(), `nested-ov-${crypto.randomBytes(4).toString('hex')}.prefab`);
+  const tmp = path.join(PROJECT_ROOT, 'assets', `nested-ov-${crypto.randomBytes(4).toString('hex')}.prefab`);
   tmpFiles.push(tmp);
   const data = [
     { __type__: 'cc.Prefab', data: { __id__: 1 } },

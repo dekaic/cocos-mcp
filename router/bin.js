@@ -1,526 +1,282 @@
 #!/usr/bin/env node
 'use strict';
 
-/**
- * cocos-mcp-router
- *
- * stdio MCP server，聚合所有活跃的 Cocos 编辑器扩展，给客户端暴露统一的 tool 列表。
- *
- * 发现机制：
- *   扫 ~/.cocos-mcp/editors/<pid>.json，每个文件代表一个活跃扩展实例
- *   过滤 mtime > 120s 的（视为已死）
- *   对每个活跃编辑器调 HTTP POST /mcp initialize + tools/list，拿到其 tool 清单
- *
- * 命名：
- *   tool 名前缀化：<projectShortName>__<originalName>
- *   例：my-project__scene_query_node_tree
- *
- * 转发：
- *   tools/call 收到前缀名 → 拆出 projectShortName → 查 editor URL → HTTP 转发
- *
- * 客户端接入：
- *   claude mcp add cocos -- node /path/to/forest/extensions/cocos-mcp/router/bin.js
- */
-
+// The stdio Router observes and forwards. Actual executors own project execution locks.
 var fs = require('fs');
 var path = require('path');
-var os = require('os');
-var http = require('http');
-
+var crypto = require('crypto');
+var cp = require('child_process');
+var registry = require('../cli/src/runtime/registry');
+var identity = require('../cli/src/runtime/identity');
+var createClient = require('../cli/src/runtime/http-client').createClient;
+var createStore = require('../cli/src/runtime/operations').createStore;
+var classify = require('../cli/src/runtime/effects').classify;
+var results = require('../cli/src/runtime/results');
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
-
-var REGISTRY_DIR = path.join(os.homedir(), '.cocos-mcp', 'editors');
-var STALE_MS = 120 * 1000;  // 2 分钟没心跳视为死
-var DISCOVERY_INTERVAL_MS = 15 * 1000;
-var PROTOCOL_VERSION = '2024-11-05';
 var ROUTER_INFO = { name: 'cocos-mcp-router', version: '2.1.0' };
+var PROTOCOL_VERSION = '2025-06-18';
 
-function logErr() {
-    // router 走 stdio，不能往 stdout 写非 JSON-RPC 内容，日志只能走 stderr
-    var args = Array.prototype.slice.call(arguments);
-    process.stderr.write('[cocos-mcp-router] ' + args.join(' ') + '\n');
+function sanitize(name) { return String(name || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_'); }
+function assignAliases(entries) {
+    var counts = new Map();
+    entries.forEach(function (entry) { var base = sanitize(entry.projectShortName); counts.set(base, (counts.get(base) || 0) + 1); });
+    var used = new Set();
+    return entries.slice().sort(function (a, b) { return a.instanceId.localeCompare(b.instanceId); }).map(function (entry) {
+        var base = sanitize(entry.projectShortName);
+        var candidate = counts.get(base) === 1 ? base : base + '-' + sanitize(path.basename(entry.projectPath));
+        var suffix = 1;
+        var alias = candidate;
+        while (used.has(alias)) alias = candidate + '-' + (++suffix);
+        used.add(alias);
+        return Object.assign({}, entry, { shortName: alias });
+    });
+}
+function validateArguments(tool, args) {
+    var error = require('../mcp-sdk/protocol/dispatcher').validateArguments(tool.inputSchema, args);
+    if (error) throw identity.fault('INVALID_ARGUMENTS', '[' + tool.name + '] ' + error);
+}
+function routerIdentity() {
+    var root = fs.realpathSync(path.resolve(__dirname, '..'));
+    var digest = crypto.createHash('sha256');
+    function visit(filename, relative) {
+        if (fs.statSync(filename).isDirectory()) {
+            if (['test', 'node_modules', '.git'].includes(path.basename(filename))) return;
+            fs.readdirSync(filename).sort().forEach(function (name) { visit(path.join(filename, name), relative + '/' + name); });
+        } else if (/\.(js|json)$/.test(filename)) digest.update(relative).update('\0').update(fs.readFileSync(filename)).update('\0');
+    }
+    ['router', 'cli/src', 'cli/bin', 'mcp-sdk'].forEach(function (entry) { visit(path.join(root, entry), entry); });
+    function git(args) { try { return cp.execFileSync('git', ['-C', root].concat(args), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { return ''; } }
+    return { sourceRealPath: root, sourceGitHead: git(['rev-parse', 'HEAD']), sourceDirty: !!git(['status', '--porcelain']),
+        runtimeBuildId: digest.digest('hex'), loadedAt: new Date().toISOString() };
 }
 
-// ── 发现活跃编辑器 ──
+function createRouter(options) {
+    options = options || {};
+    var store = options.store || createStore();
+    var editors = new Map();
+    var toolMap = new Map();
+    var discovery;
+    var discoveryDiagnostics = [];
+    var initialized = false;
+    var runtime = routerIdentity();
+    var notify = options.notify || function () {};
+    var readRegistry = options.readRegistry || registry.readRegistry;
+    var makeClient = options.createClient || createClient;
 
-/** @type {Map<string, {shortName, url, pid, tools: Array, lastProbed: number}>} */
-var editors = new Map();
-
-function scanRegistry() {
-    var entries = [];
-    try {
-        if (!fs.existsSync(REGISTRY_DIR)) return entries;
-        var files = fs.readdirSync(REGISTRY_DIR);
-        var now = Date.now();
-        files.forEach(function (name) {
-            if (!/^\d+\.json$/.test(name)) return;
-            var full = path.join(REGISTRY_DIR, name);
-            try {
-                var st = fs.statSync(full);
-                if (now - st.mtimeMs > STALE_MS) {
-                    // stale：编辑器已退出/崩溃超 STALE_MS 未更新心跳。直接删文件而非仅跳过——
-                    // 崩溃/强杀不会调 removeRegistry，旧实现只 return 不删 → 死文件无限堆积（曾攒 1100+）。
-                    try { fs.unlinkSync(full); } catch (e) { /* ignore */ }
-                    return;
+    function tools() {
+        var list = [];
+        toolMap = new Map();
+        for (var editor of editors.values()) {
+            editor.tools.forEach(function (tool) {
+                var name = editor.shortName + '__' + tool.name;
+                if (toolMap.has(name)) throw identity.fault('TOOL_NAME_CONFLICT', 'Ambiguous tool name: ' + name);
+                toolMap.set(name, { editor, tool });
+                list.push(Object.assign({}, tool, { name, description: '[' + editor.shortName + '] ' + (tool.description || ''),
+                    _meta: { ...(tool._meta || {}), cocosMcp: { ...(tool._meta && tool._meta.cocosMcp),
+                        underlyingTool: tool.name, target: { projectPath: editor.projectPath, instanceId: editor.instanceId } } } }));
+            });
+        }
+        return list.concat([
+            { name: 'router_list_editors', description: 'List authenticated service generations and runtime identities; never includes credentials.',
+                inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+            { name: 'operation_status', description: 'Query a durable operation; without operationId list unresolved operations.',
+                inputSchema: { type: 'object', additionalProperties: false, required: ['projectPath'],
+                    properties: { projectPath: { type: 'string' }, operationId: { type: 'string' } } } },
+            { name: 'operation_reconcile', description: 'Record caller disposition only after machine-verifiable execution stop. Does not roll back resources.',
+                inputSchema: { type: 'object', additionalProperties: false, required: ['projectPath', 'operationId', 'outcome', 'evidence'],
+                    properties: { projectPath: { type: 'string' }, operationId: { type: 'string' },
+                        outcome: { type: 'string', enum: ['accept_current_state', 'confirm_no_effect'] }, evidence: { type: 'string' } } } },
+        ], offlineTools.OFFLINE_TOOLS, editorControl.EDITOR_TOOLS);
+    }
+    function signature() { return identity.hash(JSON.stringify(identity.stable(tools()))); }
+    function discover() {
+        if (discovery) return discovery;
+        discovery = (async function () {
+            var before = signature();
+            var entries = await readRegistry();
+            discoveryDiagnostics = entries.diagnostics || [];
+            var next = [];
+            await Promise.all(entries.map(async function (entry) {
+                try {
+                    var client = makeClient(entry);
+                    await client.initialize();
+                    var status = await client.request('tools/call', { name: 'local_get_status', arguments: { _target: client.target } });
+                    if (status.error || !status.result || status.result.isError) return;
+                    var value = status.result.structuredContent || JSON.parse(status.result.content[0].text);
+                    if (value.instanceId !== entry.instanceId || value.projectPath !== entry.projectPath ||
+                        !value.processIdentity || value.processIdentity.startId !== entry.processIdentity.startId ||
+                        value.processIdentity.pid !== entry.pid) return;
+                    var toolResponse = await client.request('tools/list');
+                    var resourceResponse = await client.request('resources/list');
+                    if (toolResponse.error || resourceResponse.error) return;
+                    next.push(Object.assign({}, entry, { client, tools: toolResponse.result.tools || [], resources: resourceResponse.result.resources || [] }));
+                } catch (_) {
+                    // No endpoint-based cache fallback: a new generation never inherits an old generation's authority.
                 }
-                var info = JSON.parse(fs.readFileSync(full, 'utf-8'));
-                if (!info || !info.url) return;
-                entries.push(info);
-            } catch (e) { /* ignore */ }
-        });
-    } catch (e) { logErr('scanRegistry:', e.message); }
-    return entries;
-}
-
-function httpJsonRpc(targetUrl, body) {
-    return new Promise(function (resolve, reject) {
+            }));
+            editors = new Map(assignAliases(next).map(function (entry) { return [entry.instanceId, entry]; }));
+            var after = signature();
+            runtime.toolSchemaHash = after;
+            if (initialized && before !== after) notify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+        })().finally(function () { discovery = null; });
+        return discovery;
+    }
+    function logicalRequest(tool, args, editor) {
+        var { _target, operationId, ...business } = args;
+        return { projectPath: _target.projectPath, operationId, target: _target, tool, args: business,
+            expectedExecutor: editor && editor.processIdentity };
+    }
+    async function call(name, args) {
         try {
-            var u = new URL(targetUrl);
-            var data = JSON.stringify(body);
-            var req = http.request({
-                hostname: u.hostname,
-                port: u.port,
-                path: u.pathname,
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
-                timeout: 8000,
-            }, function (res) {
-                var chunks = [];
-                res.on('data', function (c) { chunks.push(c); });
-                res.on('end', function () {
-                    var raw = Buffer.concat(chunks).toString('utf-8');
-                    try { resolve(JSON.parse(raw)); }
-                    catch (e) { reject(new Error('invalid json from ' + targetUrl + ': ' + raw.slice(0, 120))); }
-                });
-            });
-            req.on('error', reject);
-            req.on('timeout', function () { req.destroy(new Error('timeout')); });
-            req.write(data);
-            req.end();
-        } catch (e) { reject(e); }
-    });
-}
-
-async function probeEditor(info) {
-    try {
-        var initRes = await httpJsonRpc(info.url, {
-            jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-                protocolVersion: PROTOCOL_VERSION,
-                clientInfo: { name: 'cocos-mcp-router', version: ROUTER_INFO.version },
-                capabilities: {},
-            },
-        });
-        if (initRes.error) throw new Error(initRes.error.message);
-        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
-        if (listRes.error) throw new Error(listRes.error.message);
-        return listRes.result.tools || [];
-    } catch (e) {
-        logErr('probe failed', info.projectShortName, info.url, e.message);
-        return null;
-    }
-}
-
-async function probeEditorResources(info) {
-    try {
-        var listRes = await httpJsonRpc(info.url, { jsonrpc: '2.0', id: 3, method: 'resources/list' });
-        if (listRes.error) throw new Error(listRes.error.message);
-        return listRes.result.resources || [];
-    } catch (e) {
-        return [];
-    }
-}
-
-/** 去掉 shortName 里的非法字符，MCP tool 名只允许 [a-zA-Z0-9_-] */
-function sanitizeShortName(name) {
-    return String(name || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
-}
-
-async function discover() {
-    var entries = scanRegistry();
-    var seen = new Set();
-    var beforeSig = toolListSignature();   // 改动前的工具签名，末尾比对决定是否通知 claude
-    for (var i = 0; i < entries.length; i++) {
-        var info = entries[i];
-        var key = info.url;
-        seen.add(key);
-        // 已缓存的 editor 也 re-probe：大项目 editor 慢启动（builder worker 没就绪）时，
-        // 首次 probe 只拿到部分/空工具；之后 asset-db 就绪、业务工具全激活，必须重新 probe 刷新，
-        // 否则 claude 永远看不到后激活的工具（如 forest__preview_refresh_and_reload）。
-        var existing = editors.get(key);
-        var tools = await probeEditor(info);
-        if (tools == null) continue;   // probe 失败：保留旧缓存（editor 可能临时忙/重启中），不覆盖
-        var resources = await probeEditorResources(info);
-        editors.set(key, {
-            baseShortName: sanitizeShortName(info.projectShortName),
-            shortName: sanitizeShortName(info.projectShortName),   // dedupeShortNames 会按冲突重设
-            projectPath: info.projectPath,
-            pid: info.pid,
-            startedAt: Date.parse(info.startedAt) || 0,   // 同项目双实例时 dedupe 按它选代表
-            url: info.url,
-            sourceRealPath: info.sourceRealPath,
-            sourceGitHead: info.sourceGitHead,
-            sourceDirty: info.sourceDirty,
-            runtimeBuildId: info.runtimeBuildId,
-            toolSchemaHash: info.toolSchemaHash,
-            loadedAt: info.loadedAt,
-            tools: tools,
-            resources: resources,
-            lastProbed: Date.now(),
-        });
-        if (!existing) {
-            logErr('discovered editor', info.projectShortName, 'pid=' + info.pid, info.url, tools.length + ' tools');
-        } else if (existing.tools.length !== tools.length) {
-            logErr('editor tools updated', info.projectShortName, existing.tools.length + ' → ' + tools.length + ' tools');
-        }
-    }
-    // 清理已消失的
-    for (var key2 of Array.from(editors.keys())) {
-        if (!seen.has(key2)) {
-            var old = editors.get(key2);
-            logErr('lost editor', old.shortName, old.url);
-            editors.delete(key2);
-        }
-    }
-    // shortName 撞名去重（多编辑器 projectShortName 相同时，否则 tool 前缀冲突会把请求路由到错的编辑器）
-    dedupeShortNames();
-    // 工具列表变化（编辑器增减 / 某编辑器工具数从不全变全）→ 通知 claude 重新拉 tools/list。
-    // 否则 claude 停在初次 tools/list 的旧快照：editor 慢启动时初次只暴露 router 自带工具，
-    // 后激活的 forest__ 业务工具 claude 永远拿不到（capabilities.tools.listChanged 声明了但从不真发是历史 bug）。
-    if (toolListSignature() !== beforeSig) {
-        notifyToolsChanged();
-    }
-}
-
-/** 工具列表签名：editors 的 shortName:工具数 排序拼接。变化即代表暴露给 claude 的聚合工具列表变了。 */
-function toolListSignature() {
-    var parts = [];
-    for (var ed of editors.values()) {
-        parts.push(ed.shortName + ':' + ed.tools.length);
-    }
-    parts.sort();
-    return parts.join('|');
-}
-
-/** 标记 claude 已完成 MCP initialize 握手——之前发 list_changed 没意义（client 尚未就绪）。 */
-var clientInitialized = false;
-
-/** 发 MCP notifications/tools/list_changed，让 claude 重新请求 tools/list 拿最新聚合列表。 */
-function notifyToolsChanged() {
-    if (!clientInitialized) return;
-    send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
-    logErr('sent notifications/tools/list_changed (工具列表已变化)');
-}
-
-/**
- * shortName 撞名去重：多个编辑器 projectShortName 算出来相同时（如某仓库下 my-app/client 和
- * my-app/server 两个项目都被 getProjectShortName 算成 my-app），
- * tool 前缀 `<shortName>__xxx` 冲突 → findEditorByPrefixedTool 只命中第一个 → 请求串到错的编辑器。
- * 冲突的用 projectPath 末段（client / server）加后缀区分，单实例保持原名不变。
- */
-function dedupeShortNames() {
-    // 第一步：同 projectPath 的重复实例是异常态（spawn 竞态留下的双实例），不能进普通撞名改名——
-    // 否则后缀同为路径末段，两个实例都被改名（forest-forest / forest-forest-2），
-    // 没人保住 base 名 → `<base>__*` 前缀路由全部失配（2026-06-11 forest 96802/26426 双实例事故）。
-    // 规则：组内 startedAt 最新的实例代表该项目参与命名，其余改名 `<base>-dup<pid>`，仍可显式触达。
-    var byPath = {};
-    for (var ed of editors.values()) {
-        var k = ed.projectPath || ed.url;
-        (byPath[k] || (byPath[k] = [])).push(ed);
-    }
-    var reps = [];
-    Object.keys(byPath).forEach(function (k) {
-        var group = byPath[k].sort(function (a, b) { return (b.startedAt || 0) - (a.startedAt || 0); });
-        reps.push(group[0]);
-        for (var i = 1; i < group.length; i++) {
-            group[i].shortName = group[i].baseShortName + '-dup' + (group[i].pid || i);
-            logErr('duplicate editor on same project', k, 'pid=' + group[i].pid, '→', group[i].shortName);
-        }
-    });
-    // 第二步：代表之间的撞名（不同项目 projectShortName 相同，如 my-app/client 与 my-app/server
-    // 都算成 my-app）按 projectPath 末段加后缀区分，单实例保持原名不变。
-    var counts = {};
-    reps.forEach(function (ed) { counts[ed.baseShortName] = (counts[ed.baseShortName] || 0) + 1; });
-    var used = {};
-    reps.forEach(function (ed2) {
-        if (counts[ed2.baseShortName] > 1) {
-            var suffix = sanitizeShortName(path.basename(ed2.projectPath || 'unknown'));
-            var name = ed2.baseShortName + '-' + suffix;
-            // 极端情况末段也相同，再加序号兜底
-            var n = 2;
-            while (used[name] && used[name] !== ed2.url) { name = ed2.baseShortName + '-' + suffix + '-' + n; n++; }
-            ed2.shortName = name;
-            used[name] = ed2.url;
-        } else {
-            ed2.shortName = ed2.baseShortName;
-        }
-    });
-}
-
-function buildAggregatedToolList() {
-    var out = [];
-    for (var ed of editors.values()) {
-        ed.tools.forEach(function (t) {
-            out.push({
-                name: ed.shortName + '__' + t.name,
-                description: '[' + ed.shortName + '] ' + (t.description || ''),
-                inputSchema: t.inputSchema || { type: 'object', properties: {} },
-            });
-        });
-    }
-    // router 自身的 meta tool
-    out.push({
-        name: 'router_list_editors',
-        description: '列出当前 router 发现的所有活跃 Cocos 编辑器（shortName / pid / url / tool 数）',
-        inputSchema: { type: 'object', properties: {} },
-    });
-    // offline prefab tools（不需要编辑器运行）
-    offlineTools.OFFLINE_TOOLS.forEach(function (t) { out.push(t); });
-    // 编辑器进程管理 tools（spawn/kill/restart/wait_ready，不需要编辑器运行）
-    editorControl.EDITOR_TOOLS.forEach(function (t) { out.push(t); });
-    return out;
-}
-
-function encodeRouterResourceUri(ed, uri) {
-    return 'cocos-router://' + ed.shortName + '/' + encodeURIComponent(uri);
-}
-
-function decodeRouterResourceUri(uri) {
-    var m = String(uri || '').match(/^cocos-router:\/\/([^\/]+)\/(.+)$/);
-    if (!m) return null;
-    return { shortName: m[1], uri: decodeURIComponent(m[2]) };
-}
-
-function buildAggregatedResourceList() {
-    var out = [];
-    for (var ed of editors.values()) {
-        (ed.resources || []).forEach(function (r) {
-            out.push({
-                uri: encodeRouterResourceUri(ed, r.uri),
-                name: '[' + ed.shortName + '] ' + (r.name || r.uri),
-                description: r.description || '',
-                mimeType: r.mimeType || 'text/plain',
-            });
-        });
-    }
-    return out;
-}
-
-function findEditorByShortName(shortName) {
-    for (var ed of editors.values()) {
-        if (ed.shortName === shortName) return ed;
-    }
-    return null;
-}
-
-function findEditorByPrefixedTool(prefixedName) {
-    for (var ed of editors.values()) {
-        var pfx = ed.shortName + '__';
-        if (prefixedName.indexOf(pfx) === 0) {
-            return { editor: ed, originalName: prefixedName.substring(pfx.length) };
-        }
-    }
-    return null;
-}
-
-function missingRequiredArguments(tool, args) {
-    var required = tool && tool.inputSchema && Array.isArray(tool.inputSchema.required)
-        ? tool.inputSchema.required
-        : [];
-    var input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
-    return required.filter(function (key) {
-        return !Object.prototype.hasOwnProperty.call(input, key) || input[key] === undefined;
-    });
-}
-
-function requiredArgumentsError(toolName, tool, args) {
-    var missing = missingRequiredArguments(tool, args);
-    if (!missing.length) return null;
-    var label = missing.length === 1 ? 'argument' : 'arguments';
-    return {
-        content: [{
-            type: 'text',
-            text: '[Error] [' + toolName + '] Missing required ' + label + ': ' + missing.join(', '),
-        }],
-        isError: true,
-    };
-}
-
-// ── stdio JSON-RPC ──
-
-var stdinBuf = '';
-process.stdin.setEncoding('utf-8');
-process.stdin.on('data', function (chunk) {
-    stdinBuf += chunk;
-    // MCP stdio 协议：按行切分 JSON-RPC 消息（每条独立 JSON）
-    var lines = stdinBuf.split('\n');
-    stdinBuf = lines.pop();
-    lines.forEach(function (line) {
-        line = line.trim();
-        if (!line) return;
-        var msg;
-        try { msg = JSON.parse(line); }
-        catch (e) { logErr('parse error:', line.slice(0, 120)); return; }
-        handleMessage(msg);
-    });
-});
-
-function send(obj) {
-    if (obj == null) return;
-    process.stdout.write(JSON.stringify(obj) + '\n');
-}
-
-async function handleMessage(msg) {
-    if (msg.jsonrpc !== '2.0') return;
-    var id = msg.id;
-    var method = msg.method;
-    var params = msg.params || {};
-
-    try {
-        var result;
-        switch (method) {
-            case 'initialize':
+            var known = tools().find(function (tool) { return tool.name === name; });
+            if (known && !name.includes('__')) validateArguments(known, args);
+            if (name === 'router_list_editors') {
                 await discover();
-                result = {
-                    protocolVersion: PROTOCOL_VERSION,
-                    serverInfo: ROUTER_INFO,
-                    capabilities: {
-                        tools: { listChanged: true },
-                        resources: {},
-                        logging: {},
-                    },
-                };
-                break;
-            case 'initialized':
-            case 'notifications/initialized':
-                clientInitialized = true;   // 握手完成；此后 discover 检测到工具变化才发 list_changed
-                if (id == null) return;
-                result = {};
-                break;
-            case 'ping':
-                result = {};
-                break;
-            case 'tools/list':
-                await discover();
-                result = { tools: buildAggregatedToolList() };
-                break;
-            case 'resources/list':
-                await discover();
-                result = { resources: buildAggregatedResourceList() };
-                break;
-            case 'resources/read':
-                result = await handleResourceRead(params.uri);
-                break;
-            case 'tools/call':
-                result = await handleToolCall(params.name, params.arguments || {});
-                break;
-            default:
-                throw Object.assign(new Error('method not found: ' + method), { code: -32601 });
-        }
-        if (id == null) return;
-        send({ jsonrpc: '2.0', id: id, result: result });
-    } catch (e) {
-        if (id == null) return;
-        send({ jsonrpc: '2.0', id: id, error: { code: e.code || -32603, message: e.message || 'internal error' } });
-    }
-}
+                return Object.assign(results.normalize(Array.from(editors.values()).map(function (editor) {
+                    var value = registry.publicEntry(editor);
+                    delete value.tools; delete value.resources;
+                    return Object.assign(value, { toolCount: editor.tools.length });
+                })), { ...(discoveryDiagnostics.length ? { structuredContent: { discoveryDiagnostics } } : {}),
+                    _meta: { cocosMcp: { routerRuntime: runtime } } });
+            }
+            if (name === 'operation_status') {
+                var records = store.status(args.projectPath, args.operationId);
+                return results.normalize(Array.isArray(records) ? records.filter(function (record) { return record.unresolved; }) : records);
+            }
+            if (name === 'operation_reconcile') return results.normalize(store.reconcile(args.projectPath, args.operationId, args.outcome, args.evidence));
+            if (offlineTools.isOfflineTool(name)) return await offlineTools.handleOfflineToolCall(name, args, { store });
+            if (editorControl.isEditorTool(name)) return await editorControl.handleEditorToolCall(name, args, { store });
 
-async function handleToolCall(name, args) {
-    // Router 自身的 meta tool
-    if (name === 'router_list_editors') {
+            // Retry lookup precedes liveness and current alias resolution. It cannot grant execution.
+            if (args.operationId && args._target) {
+                var previous;
+                try { previous = store.status(args._target.projectPath, args.operationId); }
+                catch (error) { if (error.code !== 'OPERATION_NOT_FOUND') throw error; }
+                if (previous) {
+                    if (!name.endsWith('__' + previous.tool)) throw identity.fault('OPERATION_ID_CONFLICT', 'operationId belongs to another tool');
+                    store.reserve(logicalRequest(previous.tool, args));
+                    return results.fromRecord(previous);
+                }
+            }
+            var hit = toolMap.get(name);
+            if (!hit) { await discover(); hit = toolMap.get(name); }
+            if (!hit) throw identity.fault('TARGET_STALE', 'Tool or service generation is unavailable; refresh editor discovery');
+            validateArguments(hit.tool, args);
+            registry.assertTarget(args._target, hit.editor);
+            if (classify(hit.tool.name, args) === 'query') {
+                var read = await hit.editor.client.request('tools/call', { name: hit.tool.name, arguments: args });
+                if (read.error) throw identity.fault('EDITOR_REJECTED', read.error.message);
+                return read.result;
+            }
+            var input = logicalRequest(hit.tool.name, args, hit.editor);
+            var reservation = store.reserve(input);
+            if (!reservation.created) return results.fromRecord(store.status(input.projectPath, input.operationId));
+            store.observe(input, 'dispatched');
+            try {
+                var response = await hit.editor.client.request('tools/call', { name: hit.tool.name, arguments: args,
+                    _meta: { cocosMcp: { submissionId: reservation.request.submissionId } } });
+                if (response.error) throw identity.fault('EDITOR_REJECTED', response.error.message);
+                return response.result;
+            } catch (error) {
+                store.observe(input, 'transport_unknown', { code: error.code || 'DISCONNECTED' });
+                return results.fromRecord(store.status(input.projectPath, input.operationId));
+            }
+        } catch (error) { return error.operation ? results.fromRecord(error.operation) : results.fromError(error, { operationId: args && args.operationId,
+            originalTarget: args && args._target, projectPath: args && (args.projectPath || args.projectRoot || args._target && args._target.projectPath) }); }
+    }
+    async function resources() {
         await discover();
-        var list = Array.from(editors.values()).map(function (ed) {
-            return {
-                shortName: ed.shortName,
-                pid: ed.pid,
-                url: ed.url,
-                projectPath: ed.projectPath,
-                toolCount: ed.tools.length,
-                sourceRealPath: ed.sourceRealPath,
-                sourceGitHead: ed.sourceGitHead,
-                sourceDirty: ed.sourceDirty,
-                runtimeBuildId: ed.runtimeBuildId,
-                toolSchemaHash: ed.toolSchemaHash,
-                loadedAt: ed.loadedAt,
-            };
-        });
-        return { content: [{ type: 'text', text: JSON.stringify(list, null, 2) }] };
+        return Array.from(editors.values()).flatMap(function (editor) { return editor.resources.map(function (resource) {
+            return Object.assign({}, resource, { uri: 'cocos-router://' + editor.instanceId + '/' + encodeURIComponent(resource.uri), name: '[' + editor.shortName + '] ' + resource.name });
+        }); });
     }
-
-    // Offline prefab tools（不需要编辑器运行，同进程调用 cli）
-    if (offlineTools.isOfflineTool(name)) {
-        var offlineDef = offlineTools.OFFLINE_TOOLS.find(function (tool) { return tool.name === name; });
-        var offlineArgsError = requiredArgumentsError(name, offlineDef, args);
-        if (offlineArgsError) return offlineArgsError;
-        return await offlineTools.handleOfflineToolCall(name, args);
-    }
-
-    // 编辑器进程管理 tools（spawn/kill/restart/wait_ready，router 本地执行，不走转发）
-    if (editorControl.isEditorTool(name)) {
-        var editorDef = editorControl.EDITOR_TOOLS.find(function (tool) { return tool.name === name; });
-        var editorArgsError = requiredArgumentsError(name, editorDef, args);
-        if (editorArgsError) return editorArgsError;
-        return await editorControl.handleEditorToolCall(name, args);
-    }
-
-    var hit = findEditorByPrefixedTool(name);
-    if (!hit) {
-        // 可能是新增编辑器，re-discover 再试一次
+    async function readResource(uri) {
+        var match = String(uri || '').match(/^cocos-router:\/\/([^/]+)\/(.+)$/);
+        if (!match) throw identity.fault('INVALID_RESOURCE', 'Invalid Router resource URI');
         await discover();
-        hit = findEditorByPrefixedTool(name);
+        var editor = editors.get(match[1]);
+        if (!editor) throw identity.fault('TARGET_STALE', 'Resource service generation is unavailable');
+        var response = await editor.client.request('resources/read', { uri: decodeURIComponent(match[2]) });
+        if (response.error) throw Object.assign(new Error(response.error.message), { code: response.error.code });
+        return { ...response.result, contents: response.result.contents.map(function (content) {
+            return { ...content, uri: 'cocos-router://' + editor.instanceId + '/' + encodeURIComponent(content.uri) };
+        }) };
     }
-    if (!hit) {
-        return { content: [{ type: 'text', text: 'unknown tool: ' + name + '\n可用编辑器: ' + Array.from(editors.values()).map(function(e){return e.shortName;}).join(', ') }], isError: true };
-    }
-
-    var forwardedDef = hit.editor.tools.find(function (tool) { return tool.name === hit.originalName; });
-    var forwardedArgsError = requiredArgumentsError(hit.originalName, forwardedDef, args);
-    if (forwardedArgsError) return forwardedArgsError;
-
-    try {
-        var forward = await httpJsonRpc(hit.editor.url, {
-            jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
-            params: { name: hit.originalName, arguments: args },
-        });
-        if (forward.error) {
-            return { content: [{ type: 'text', text: 'editor error: ' + forward.error.message }], isError: true };
-        }
-        return forward.result;
-    } catch (e) {
-        // 编辑器可能关闭了，移除缓存
-        editors.delete(hit.editor.url);
-        return { content: [{ type: 'text', text: 'forward failed: ' + e.message }], isError: true };
-    }
+    return { discover, tools, call, resources, readResource, runtime,
+        initialized() { initialized = true; }, signature };
 }
 
-// ── 周期性重扫 ──
-async function handleResourceRead(uri) {
-    var decoded = decodeRouterResourceUri(uri);
-    if (!decoded) {
-        return { contents: [{ type: 'text', text: 'unknown router resource uri: ' + uri, mimeType: 'text/plain' }] };
-    }
-    await discover();
-    var ed = findEditorByShortName(decoded.shortName);
-    if (!ed) {
-        return { contents: [{ type: 'text', text: 'editor not found for resource: ' + decoded.shortName, mimeType: 'text/plain' }] };
-    }
-    try {
-        var forward = await httpJsonRpc(ed.url, {
-            jsonrpc: '2.0', id: Date.now(), method: 'resources/read',
-            params: { uri: decoded.uri },
-        });
-        if (forward.error) {
-            return { contents: [{ type: 'text', text: 'editor error: ' + forward.error.message, mimeType: 'text/plain' }] };
+function createHandler(router) {
+    var protocolVersion = PROTOCOL_VERSION;
+    var handshake = false;
+    var initializing = false;
+    var ready = false;
+    async function handle(message) {
+        if (Array.isArray(message)) {
+            if (protocolVersion !== '2025-03-26' || !message.length || message.some(item => item && item.method === 'initialize')) return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid batch' } };
+            var responses = (await Promise.all(message.map(item => Array.isArray(item)
+                ? { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Batch entries must be single messages' } }
+                : handle(item)))).filter(Boolean);
+            return responses.length ? responses : null;
         }
-        return forward.result;
-    } catch (e) {
-        editors.delete(ed.url);
-        return { contents: [{ type: 'text', text: 'forward failed: ' + e.message, mimeType: 'text/plain' }] };
+        if (message && message.jsonrpc === '2.0' && message.method === undefined && message.id !== undefined && ((message.result !== undefined) !== (message.error !== undefined))) return null;
+        if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string' ||
+            message.id !== undefined && !['string', 'number'].includes(typeof message.id) ||
+            message.params !== undefined && (!message.params || typeof message.params !== 'object' || Array.isArray(message.params)) ||
+            message.id === undefined && !message.method.startsWith('notifications/')) return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } };
+        var params = message.params || {};
+        try {
+            if (message.method !== 'initialize' && message.method !== 'ping' && message.method !== 'notifications/initialized' && !ready) throw Object.assign(new Error('Initialization must complete before use'), { code: -32600 });
+            var result;
+            switch (message.method) {
+                case 'initialize':
+                    if (handshake || initializing || !params.clientInfo || typeof params.clientInfo.name !== 'string' || typeof params.clientInfo.version !== 'string' || !params.capabilities || typeof params.capabilities !== 'object' || Array.isArray(params.capabilities) || typeof params.protocolVersion !== 'string') throw Object.assign(new Error('Invalid initialization'), { code: -32602 });
+                    protocolVersion = ['2025-03-26', '2025-06-18'].includes(params.protocolVersion) ? params.protocolVersion : PROTOCOL_VERSION;
+                    initializing = true;
+                    try { await router.discover(); }
+                    finally { initializing = false; }
+                    handshake = true;
+                    result = { protocolVersion, serverInfo: ROUTER_INFO, capabilities: { tools: { listChanged: true }, resources: {} },
+                        _meta: { cocosMcp: { routerRuntime: router.runtime } } }; break;
+                case 'notifications/initialized':
+                    if (message.id !== undefined) throw Object.assign(new Error('initialized must be a notification'), { code: -32600 });
+                    if (handshake) { ready = true; router.initialized(); } return;
+                case 'ping': result = {}; break;
+                case 'tools/list': await router.discover(); result = { tools: router.tools() }; break;
+                case 'tools/call':
+                    if (typeof params.name !== 'string' || !params.name || params.arguments !== undefined && (!params.arguments || typeof params.arguments !== 'object' || Array.isArray(params.arguments))) throw Object.assign(new Error('Invalid tool call parameters'), { code: -32602 });
+                    result = await router.call(params.name, params.arguments === undefined ? {} : params.arguments); break;
+                case 'resources/list': result = { resources: await router.resources() }; break;
+                case 'resources/read': result = await router.readResource(params.uri); break;
+                default: throw Object.assign(new Error('Method not found'), { code: -32601 });
+            }
+            if (message.id !== undefined) return { jsonrpc: '2.0', id: message.id, result };
+        } catch (error) {
+            if (message.id !== undefined) return { jsonrpc: '2.0', id: message.id, error: { code: typeof error.code === 'number' ? error.code : -32603, message: error.message } };
+        }
     }
+    return handle;
 }
 
-setInterval(function () { discover().catch(function () {}); }, DISCOVERY_INTERVAL_MS);
+function startRouter() {
+    function send(value) { if (value) process.stdout.write(JSON.stringify(value) + '\n'); }
+    var router = createRouter({ notify: send });
+    var handle = createHandler(router);
+    var buffer = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', function (chunk) {
+        buffer += chunk;
+        var lines = buffer.split('\n'); buffer = lines.pop();
+        lines.filter(function (line) { return line.trim(); }).forEach(function (line) {
+            try { handle(JSON.parse(line)).then(send).catch(function (error) { process.stderr.write(error.message + '\n'); }); }
+            catch (_) { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+        });
+    });
+    var timer = setInterval(function () { router.discover().catch(function (error) { process.stderr.write(error.message + '\n'); }); }, 15000);
+    process.stdin.on('end', function () { clearInterval(timer); });
+    router.discover().catch(function (error) { process.stderr.write(error.message + '\n'); });
+}
 
-// 启动首次发现
-discover().catch(function (e) { logErr('initial discover failed', e.message); });
-logErr('cocos-mcp-router started (stdio)');
+module.exports = { createRouter, createHandler, assignAliases, validateArguments };
+if (require.main === module) startRouter();

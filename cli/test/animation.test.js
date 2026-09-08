@@ -9,10 +9,12 @@ const path = require('path');
 const {
   parseAnimationClip,
   queryAnimationClip,
-  createAnimationClip,
+  createAnimationClip: createAnimationClipImpl,
 } = require('../src/index.js');
 
 const TMP_DIRS = [];
+const fixture = require('./fixture-project');
+function createAnimationClip(file, spec) { return createAnimationClipImpl(file, spec, { operationId: require('crypto').randomUUID(), store: fixture.store }); }
 
 after(() => {
   for (const dir of TMP_DIRS) {
@@ -21,7 +23,7 @@ after(() => {
 });
 
 function makeTmpDir(tag) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-animation-' + tag + '-'));
+  const dir = fs.mkdtempSync(path.join(fixture.projectRoot, 'assets', 'cocos-mcp-animation-' + tag + '-'));
   TMP_DIRS.push(dir);
   return dir;
 }
@@ -179,7 +181,7 @@ test('createAnimationClip writes a queryable clip without overwriting an existin
   );
   assert.throws(
     () => createAnimationClip(filePath, minimalCreateSpec()),
-    /已存在/
+    /existing resource/
   );
 });
 

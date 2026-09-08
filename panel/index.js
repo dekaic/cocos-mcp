@@ -259,13 +259,14 @@ exports.methods = {
             const cfg = await Editor.Message.request('cocos-mcp', 'get-mcp-config');
             if (!cfg || !cfg.url) { this.showToast('MCP 未运行'); return; }
             await navigator.clipboard.writeText(cfg.url);
-            this.showToast('已复制: ' + cfg.url);
+            this.showToast('仅诊断地址；调用必须通过认证和实例绑定的 Router');
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }
     },
     async onCopyCli() {
         try {
             const cfg = await Editor.Message.request('cocos-mcp', 'get-mcp-config');
             if (!cfg || !cfg.cliAddCommand) { this.showToast('MCP 未运行'); return; }
+            if (cfg.migrationRequired) { this.showToast(cfg.connectionPolicy); return; }
             await navigator.clipboard.writeText(cfg.cliAddCommand);
             this.showToast('已复制 CLI 命令');
         } catch (e) { this.showToast('失败: ' + (e.message || e)); }

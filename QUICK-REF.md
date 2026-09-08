@@ -2,11 +2,13 @@
 
 > 一页搞定。复杂场景看 [`doc/cli.md`](./doc/cli.md)。
 
-## 入口（在 `forest/` 项目根执行）
+## 入口（在已确认的真实项目根执行）
 
 ```bash
 node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command>
 ```
+
+正式写入统一要求：Creator 已关闭、资源位于该项目内、`--operation-id <逻辑操作ID>`。预演可以在线，但不是提交凭证；带 ID 的预演和正式执行使用不同 ID。unknown 时查询原操作，不换 ID 重放。完整恢复与认证规则见 [执行契约](./doc/execution-contract.md)。下表业务命令省略的执行上下文仍必须提供。
 
 ## 节点定位三种形式（`node` / `parent` / `target` / `source` / `refNode` 通用）
 
@@ -30,7 +32,7 @@ node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js <command>
 | 看 stub 节点已写入的所有 propertyOverrides | `query <prefab> --selector overrides --id 58` |
 | 比较两个 prefab 字段差异 | `diff <a> <b>` |
 
-> ⚠️ **下方「改 prefab」各表列的是 op 名，不是独立子命令**——统一通过 `batch <prefab> ops.json` 执行（单条改动也要包成 `[{"op":"...",...}]`）。直接 `cli set-sprite-frame ...` 会报「未知子命令」。CLI 真正的子命令只有 `query` / `set`（单字段快捷写入 `set <prefab> <node> <field> <value>`）/ `batch` / `anim` / `diff`。写法见下方 §写 ops.json 速记。
+> ⚠️ **下方「改 prefab」各表列的是 op 名，不是独立子命令**——统一通过 `batch <prefab> ops.json` 执行（单条改动也要包成 `[{"op":"...",...}]`）。直接 `cli set-sprite-frame ...` 会报「未知子命令」。单字段快捷写入使用 `set <prefab> <node> <field> <value>`；全部子命令及管理入口以 `--help` 为准。写法见下方 §写 ops.json 速记。
 
 ### 改 prefab — 节点字段
 
@@ -153,12 +155,14 @@ node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js query <prefab> --selector tre
 # 3. 干跑预览
 node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js batch <prefab> /tmp/ops.json --dry-run
 
-# 4. 落盘
-node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js batch <prefab> /tmp/ops.json
+# 4. 明确关闭目标 Creator 后重新规划并提交
+node extensions/cocos-mcp/cli/bin/cocos-mcp-cli.js batch <prefab> /tmp/ops.json --operation-id edit-prefab-001
 
 # 5. 类型检查
 npx tsc --noEmit
 ```
+
+重开 Creator 后重新发现并绑定新 instanceId，再验证导入、引用和预览。所有 Editor 调用带 `_target`，副作用另带 operationId。`operation-status`、`operation-reconcile`、`offline-recover` 的用法见执行契约；恢复默认预演，实际恢复需 `--apply`。
 
 ## 完整文档
 

@@ -84,6 +84,9 @@ test('scene component method validation fails closed without invoking the method
         args: [],
     }), { uuid: 'component', name: 'runProbe' });
     assert.equal(callCount, 0, 'validation must not invoke the component method');
+    Object.defineProperty(component, 'getterMethod', { get() { callCount++; return () => {}; } });
+    assert.throws(() => methods.validateComponentMethod({ uuid: 'component', name: 'getterMethod', args: [] }), /method not found/);
+    assert.equal(callCount, 0, 'validation must not invoke a method accessor');
 
     assert.throws(
         () => methods.validateComponentMethod({ uuid: 'node', name: 'runProbe', args: [] }),

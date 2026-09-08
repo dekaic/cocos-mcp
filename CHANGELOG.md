@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Breaking changes（下一主版本修复范围，尚未发布）
+
+- Editor 调用要求真实项目路径与服务代次 `instanceId`；副作用调用要求 `operationId`，生命周期不再接受短名／PID-only／restart 隐式 spawn。旧注册只报告迁移，不兼容写入回退。
+- 本机 HTTP 强制每代 bearer、拒绝任何 Origin，完成版本协商与 initialized 生命周期；认证 GET /mcp 为 405，不虚报 HTTP 推送。参数和控制结果采用统一契约。
+- Router、Editor 与 CLI 共享持久化请求／执行事实、项目互斥和维护门禁。超时不是失败或取消，同 ID 不盲目重放，unknown 阻止新修改；核验结论与执行事实分开保存。
+- 离线正式写入与恢复要求 Creator 关闭；全部资源写入口通过内存规划和可恢复事务，包含 `.meta`。`prefab_edit/prefab_batch` 支持 dryRun（默认 false）；Editor meta_fix 仅预览，实际修复用离线 `--apply`。
+- 新增 operation_status、operation_reconcile、offline_recover 与 Editor 本地状态查询；恢复默认预演。COMMITTED 是唯一提交点，崩溃后补齐已提交结果或核验后恢复未提交事务，外部冲突保留现场。
+- CLI 所有副作用命令新增必需 operation ID，目标须位于项目内；glob 逐项事务、稳定子 ID、首次失败停止。build 不再用既有产物覆盖非成功退出状态。
+- 成功业务 payload 保留，控制错误与非终态通过 cocosMcpControl 明确返回；scheduled 重载不再当作完成，需交接与新运行身份验证。
+- 修复 SDK 归一化在同时返回 structuredContent 和额外业务字段、但省略 content 时丢失业务字段的问题；额外字段进入独立文本项，原结构化结果及输出 schema 不变。
+
+保证边界：不承诺任意 Editor 操作跨崩溃恰好一次，不承诺多文件同时可见，也不宣称消除外部写入者检查与替换间的竞态。平台不能证明进程身份、私有权限或持久化能力时拒绝危险操作。迁移与处置路径见 [执行契约](doc/execution-contract.md)；真实 Creator／平台及 release 验收独立记录，不能从本节推导已经通过。
+
+### Fixed
+
+- 修复离线恢复在操作 ID 查重前读取当前资源的问题：相同正式恢复请求先核对原始指纹并返回持久化结果，后续资源修改不掩盖既有成功或 unknown；新恢复与预演仍检查当前冲突，不重放或解除冻结。
+- 补齐 `fix-meta --help` 的默认预演、项目根目录、`--apply`、`--operation-id` 及 Creator 关闭要求。
+- 修复未发布共享执行锁的释放／维护竞争：维护方只处置准确归属且进程已退出的残留锁，不能因终态或停止收据删除活持有者的锁；同步执行停止后由原持有者释放，unknown 与未完成事务仍保持冻结，避免旧释放误删后继锁。
+- 修复启动就绪等待因一次进程身份采样异常提前退出：仅在原等待期限内重新采集只读观测，保持原操作和执行锁；持续异常仍为 unknown。保留采样错误码诊断，不延长采样超时、不采用 PID-only，也不放宽离线写入准入。
+- 修复协议组合边界：03-26 batch 的嵌套数组不再递归派发或产生嵌套响应；合法兄弟请求仍独立处理，合法通知不回包；SDK 拒绝以数组作为初始化 capabilities。06-18 仍拒绝 batch，不放宽认证、目标或操作门禁。
+
 ## [2.1.0] - 2026-08-27
 
 ### Added

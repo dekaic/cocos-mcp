@@ -267,11 +267,16 @@ function defineTools(ctx) {
                     name: args.name,
                     args: args.args === undefined ? [] : args.args,
                 };
-                await msg('scene', 'execute-scene-script', {
-                    name: 'cocos-mcp',
-                    method: 'validateComponentMethod',
-                    args: [payload],
-                });
+                try {
+                    await msg('scene', 'execute-scene-script', {
+                        name: 'cocos-mcp',
+                        method: 'validateComponentMethod',
+                        args: [payload],
+                    });
+                } catch (error) {
+                    // This private Scene method only validates; no component method has been dispatched.
+                    throw require('../cli/src/runtime/operations').safeFailure(error);
+                }
                 return await msg('scene', 'execute-component-method', payload);
             },
         },
@@ -390,14 +395,22 @@ function defineTools(ctx) {
         },
         {
             name: 'asset_reimport',
-            description: '重新导入指定资源',
+            description: '重新导入 AssetDB 已识别的资源，并核验导入结果；尚未识别的资源须先等待导入或刷新。',
             inputSchema: {
                 type: 'object',
                 properties: { url: { type: 'string' } },
                 required: ['url'],
             },
             handler: async function (args) {
-                return await msg('asset-db', 'reimport-asset', args.url);
+                var before = await msg('asset-db', 'query-asset-info', args.url);
+                if (!before || !before.uuid) throw require('../cli/src/runtime/operations').safeFailure(
+                    require('../cli/src/runtime/identity').fault('ASSET_NOT_READY', 'AssetDB has not identified this resource; wait for import before reimporting'));
+                var result = await msg('asset-db', 'reimport-asset', args.url);
+                var after = await msg('asset-db', 'query-asset-info', args.url);
+                if (!after || after.uuid !== before.uuid || after.imported !== true || after.invalid !== false) {
+                    throw require('../cli/src/runtime/identity').fault('ASSET_IMPORT_UNCONFIRMED', 'Reimport was dispatched but a valid imported resource could not be confirmed; inspect the original operation');
+                }
+                return result;
             },
         },
         {
@@ -501,13 +514,14 @@ function defineTools(ctx) {
                         loadedAt: status.extensionRuntime.loadedAt,
                     }
                     : null;
-                local.reloadPackage(args.name);
+                var completed = await local.reloadPackage(args.name);
                 return {
                     ok: true,
                     reloaded: args.name,
                     accepted: true,
-                    state: 'scheduled',
-                    completionObserved: false,
+                    state: 'completed',
+                    completionObserved: true,
+                    completion: completed,
                     runtimeIdentityBefore: before,
                 };
             },
@@ -546,13 +560,14 @@ function defineTools(ctx) {
         },
         {
             name: 'meta_fix',
-            description: '清理 Cocos 重启造成的图片 meta 噪音（保守，只还原能确认是破坏的）：① 纯 key 顺序/格式变化还原 git 原文；② 九宫格 border 被重置成 0 精准还原；③ trimType 从 none 被改成自动裁剪还原该 frame 到 git。靠 git 对比、正确处理中文路径。默认 dryRun=true；只有显式 dryRun=false 才写入。',
+            description: '预览 Cocos 图片 meta 噪音修复；Editor 内不写入。正式修复须关闭目标 Creator 后使用 offline CLI fix-meta。',
             inputSchema: {
                 type: 'object',
-                properties: { dryRun: { type: 'boolean', default: true, description: '默认 true，只预览不写；显式 false 才应用修复' } },
+                properties: { dryRun: { type: 'boolean', enum: [true], default: true, description: 'Editor 内仅支持预览；false 被拒绝' } },
             },
             handler: async function (args) {
-                return local.fixMeta({ dryRun: !args || args.dryRun !== false });
+                if (args && args.dryRun === false) throw new Error('OFFLINE_REQUIRED: close Creator and use CLI fix-meta');
+                return local.fixMeta({ dryRun: true });
             },
         },
     ];

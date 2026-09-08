@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { readFile, currentPlan, listFiles } = require('./runtime/plan');
 
 // ─── 模块级缓存 ───────────────────────────────────────────────
 
@@ -73,24 +73,14 @@ function _buildIndex(projectRoot) {
     throw new Error(`UuidResolver: assets 目录不存在: ${assetsDir}`);
   }
 
-  // 用 find 命令比 Node 递归快，且无需手写 readdir 递归
-  let metaFiles;
-  try {
-    const raw = execSync(
-      `find "${assetsDir}" -name "*.prefab.meta" -type f`,
-      { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-    );
-    metaFiles = raw.trim().split('\n').filter(Boolean);
-  } catch (e) {
-    throw new Error(`UuidResolver: find 命令失败: ${e.message}`);
-  }
+  const metaFiles = listFiles([assetsDir], file => file.endsWith('.prefab.meta'));
 
   const index = new Map();
 
   for (const metaFile of metaFiles) {
     let meta;
     try {
-      meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      meta = JSON.parse(readFile(metaFile, 'utf8'));
     } catch (_) {
       // meta 损坏时跳过，不中断整体扫描
       continue;
@@ -119,6 +109,7 @@ function _buildIndex(projectRoot) {
  */
 function getUuidIndex(startPath) {
   const projectRoot = _findProjectRoot(startPath);
+  if (currentPlan()) return _buildIndex(projectRoot);
 
   if (_cache.has(projectRoot)) {
     return _cache.get(projectRoot);

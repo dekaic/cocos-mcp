@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTools, findTool } = require('./test/tool-fixture.js');
 
-test('meta_fix defaults to dry-run and requires explicit dryRun=false to write', async () => {
+test('meta_fix is preview-only inside Creator and rejects explicit writes', async () => {
     const calls = [];
     const tool = findTool(makeTools({
         local: {
@@ -17,6 +17,6 @@ test('meta_fix defaults to dry-run and requires explicit dryRun=false to write',
 
     assert.equal(tool.inputSchema.properties.dryRun.default, true);
     assert.deepEqual(await tool.handler({}), { dryRun: true });
-    assert.deepEqual(await tool.handler({ dryRun: false }), { dryRun: false });
-    assert.deepEqual(calls, [{ dryRun: true }, { dryRun: false }]);
+    await assert.rejects(tool.handler({ dryRun: false }), /OFFLINE_REQUIRED/);
+    assert.deepEqual(calls, [{ dryRun: true }]);
 });

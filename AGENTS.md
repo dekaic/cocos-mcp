@@ -1,174 +1,75 @@
 # AGENTS.md
 
-本文是 `cocos-mcp` 的 agent 使用规则。只写插件级规则；项目自己的预览参数、业务本地服地址、测试账号和验证步骤写在项目文档里。
+本文是插件级使用规则；项目自己的业务参数、测试账号和验证步骤仍由项目文档定义。当前工作树的破坏性契约属于 Unreleased，不等于已经发布或安装。
 
 ## 允许入口
 
-使用本插件时，只允许从下面这些入口进入：
-
 | 入口 | 用途 |
 |---|---|
-| 当前项目 MCP 实例 | `scene` / `asset-db` / `preview` / `local` 域操作 |
-| 当前项目 HTTP MCP endpoint | 当前 agent 没注入 MCP tool 时的等价入口 |
-| `cocos-mcp-cli` offline 命令 | `.prefab` 查询和修改、`.anim` 查询 |
-| Playwright / Chrome | 浏览器里真实游戏页面的交互验证 |
-| `.dev/refresh` 的 `restart-package` | 重启本扩展代码 |
+| 精确绑定的项目 MCP | scene / asset-db / preview / local |
+| 私有认证的本机 HTTP 客户端 | 未注入 Router tool 时，使用配套 runtime/http-client，不能直接使用旧 URL |
+| cocos-mcp-cli | 资源查询、Creator 关闭后的事务写入与受控恢复 |
+| Playwright / Chrome | 在实际预览 URL 上验证游戏 |
+| .dev/refresh JSON 命令 | 已绑定目标、操作 ID 的扩展重载，不是免门禁后门 |
 
-其它入口不作为本插件使用路径。项目文档可以补充项目自己的只读兜底信息，但不能覆盖本文件的入口规则。
+## 项目与实例绑定
 
-## 绑定当前项目 MCP
+1. 解析真实绝对项目路径并读取当前完整 tools/list，先调用 `router_list_editors`。
+2. 绑定唯一 `projectPath + instanceId`。展示短名不是执行身份；禁止按最新心跳、目录名、PID 或端口猜目标。每次 Editor tool 带 `_target: { projectPath, instanceId }`。
+3. Router 按完整工具名精确映射；定义中的 `_meta.cocosMcp.target` 可供客户端绑定，但不能覆盖调用者显式提供的旧目标。
+4. 核验 Router 与 Editor 各自的 source/runtime/schema identity。工作树 HEAD、dirty 和配置文本不能代替实际加载状态；修改 Router 或 CLI 后必须重启对应 stdio Router。
+5. 服务每次启动、HTTP 重启、扩展重载都换 `instanceId`。重绑新实例只用于新操作；旧操作永远保留原目标，只能查询而不能向新实例重放。
 
-同机可能同时打开多个 Cocos 项目。agent 必须先按项目根目录绑定 MCP 实例，再执行后续操作。
+注册文件位于 `~/.cocos-mcp/editors/<process-start-hash>-<instanceId>.json`。每代服务仅更新、删除自己的文件。共享 runtime 验证 OS 进程启动身份、规范化项目和私有权限；发现模块不删除 legacy 或损坏记录。旧 `<pid>.json`、未认证客户端只能报告迁移需要，不作为写入 fallback。
 
-实例注册文件：
+## HTTP 契约
 
-```text
-~/.cocos-mcp/editors/*.json
-```
+只支持 loopback HTTP。bearer 每代更新，凭据只由私有注册读取，不得放入公共列表、日志、命令行、URL、操作记录或配置示例。
 
-绑定规则：
+使用配套 `cli/src/runtime/http-client.js` 完成 initialize、版本协商、initialized 通知、会话头及后续协议头；不要用旧裸 curl tools/call 示例。支持的固定协议为 `2025-03-26` 和 `2025-06-18`，batch 按协商版本处理。所有 Origin（包括 null）拒绝；MCP POST 要求 JSON 与包含 JSON/SSE 的 Accept，body 上限 8 MiB。合法认证 GET /mcp 和 OPTIONS 为 405；健康检查走独立认证 GET /health，不提供 SSE。
 
-1. 扫描 `~/.cocos-mcp/editors/*.json`。
-2. 只保留 `projectPath` 与当前项目根目录一致的记录。
-3. 校验 `pid` 仍存活。
-4. 多个匹配时取 `updatedAt` 最新的记录。
-5. 后续所有 HTTP MCP 请求都使用该记录的 `url`。
-6. 验证扩展代码变化时同时核对 `runtimeBuildId`、`toolSchemaHash` 和 `loadedAt`；工作树当前 HEAD/dirty 不能证明进程已加载新代码。
+工具 arguments 的未知业务字段拒绝；标准 MCP envelope 和合法 _meta 单独按协议验证。通用校验覆盖当前使用的类型、必填、边界与组合结构，不宣称实现全部 JSON Schema 关键字。
 
-快速确认脚本：
+## 操作追踪与写入权
 
-```bash
-python3 - <<'PY'
-import glob
-import json
-import os
-from pathlib import Path
+- 资源、场景、生命周期等副作用调用必须提供 `operationId`；打开场景、刷新、重导同样不是查询。纯查询与预演不强制 ID。一个新逻辑操作一个 ID，相同请求重试保持 ID、原始目标、业务参数和输入内容不变。
+- 查重先于 busy 和目标存活检查。ID 与底层工具、原始目标、参数或输入摘要冲突时拒绝；不能用新的别名或 HTTP 地址改变逻辑请求。
+- 必须检查 `isError` 和 `structuredContent.cocosMcpControl`。submitted/running 表示尚未完成；unknown 表示后果未知，不等于执行失败或从未写入。超时只查询原操作，不换 ID 重试。
+- 实际执行者持项目锁，普通 Router 转发不重复持锁。HTTP 断连、Router 退出不取消 Editor 工作，也不释放它的保护。unknown、未结事务与锁异常全部解决前，普通写入继续冻结。
+- `operation_status(projectPath, operationId?)` 查询单项或未解决项；Editor 对应 `local_operation_status`。状态查询保留历史原目标。
 
-def find_project_root(start):
-    cur = Path(start).resolve()
-    for item in [cur, *cur.parents]:
-        if (item / 'assets').is_dir() and (item / 'settings').is_dir() and (item / 'extensions').is_dir():
-            return str(item)
-    return str(cur)
+## 离线资源流程
 
-PROJECT = os.environ.get('PROJECT_ROOT') or find_project_root(os.getcwd())
-items = []
+1. 先查询源资源与实际实例、引用及未保存编辑；保留用户修改。
+2. 预演可以在 Creator 运行时执行。它只是当时的建议差异，不保证 UUID 或正式计划相同。
+3. 正式写入与恢复要求准确的目标 Creator 已关闭，不自动关闭或丢弃编辑。所有直接 API、CLI 与 Router 写入口使用同一事务核心；目标必须在项目内、父目录已存在。
+4. `prefab_edit/prefab_batch` 的 dryRun 默认 false；实际执行须有具体写入授权与 ID。CLI 写命令带 `--operation-id`，预演用 `--dry-run`。Editor `meta_fix` 仅预览；真实修复走关闭后的 `fix-meta --apply --operation-id`。
+5. 正式执行重新规划并验证基线，包含 .meta。多文件事务有持久化计划、备份、逐文件事实和最终 COMMITTED；不承诺同时可见。glob 每个文件独立事务，子 ID 稳定派生，首次失败停止后续并非零退出。
+6. 提交后重新打开 Creator、绑定新实例，确认 AssetDB 导入，再按范围 reimport/refresh、重载资源、重新查询引用与真实预览。不能用旧编辑会话覆盖磁盘。
 
-for path in glob.glob(os.path.expanduser('~/.cocos-mcp/editors/*.json')):
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        if os.path.realpath(data.get('projectPath', '')) != os.path.realpath(PROJECT):
-            continue
-        os.kill(int(data['pid']), 0)
-        items.append((data.get('updatedAt', ''), path, data))
-    except Exception:
-        pass
+`changed/written/wouldChange` 只统计目标资源，包括 .meta；预演 changed/written 为 false，未知可为 null。回滚不能抹去曾经写入的事实。
 
-for _, path, data in sorted(items)[-3:]:
-    print(path, data.get('url'), data.get('previewUrl') or '')
-PY
-```
+## 恢复与核验
 
-## Tool 与 HTTP MCP
+- `offline_recover(projectRoot, transactionId)` 默认预演。实际恢复指定 dryRun:false 和新的恢复 operationId；CLI 使用 `offline-recover --project-root ... --transaction-id ... --apply --operation-id ...`。
+- 有有效 COMMITTED 但缺操作结果时补齐结果，不回滚；未提交事务预览回滚。回滚前核验当前文件属于该事务；外部修改、损坏备份／日志或路径变化均停止，保留现场。
+- `operation_reconcile(projectPath, operationId, outcome, evidence)` 不改资源、不替代事务恢复。outcome 为 accept_current_state 或 confirm_no_effect；调用方报告单独保存，不改写原执行事实。工具必须先证明执行停止；HTTP 不通、无心跳或一句“已检查”都不够。
+- 维护入口只处理指定操作及关联事务／锁。仅在归属明确、持有者进程已退出时处置残留锁；活持有者必须自行释放，终态或停止收据不能授权维护方抢删其锁。同步执行释放锁不解除 unknown 或事务冻结。孤立、损坏或归属不明的锁输出诊断，人工查明，不能删除整个状态目录或用 force 解锁。
+- 解决一项后重新检查全部阻塞原因。需要关闭准确 Creator 时明确交给用户或已有授权的测试生命周期，不自动杀进程。不同主版本不得并行受控写同项目，也不能降级绕过冻结。
 
-如果当前 agent 已注入 router 暴露的 MCP tool，使用带项目名前缀的 tool：
+## 扩展重载
 
-```text
-forest__preview_query_url
-forest__asset_reimport
-forest__preview_refresh_and_reload
-```
+`local_reload_package` 最初以 running 控制分支返回 scheduled 信息。查询原 operationId，必须完成旧服务停止交接、新 instanceId、loadedAt 与实际运行身份核验后才能报告完成；交接不完整保持 unknown。
 
-如果当前 agent 没注入这些 tool，按上节解析当前项目 MCP，再直接调用 HTTP endpoint。
+`.dev/refresh` 只接受带 `_target`、`operationId`、`name` 的单条 JSON；旧 restart-package 文本拒绝。面板、文件命令也使用项目门禁。心跳、诊断和就绪查询的内部维护写入不作为资源修改。
 
-HTTP 调用格式：
+## 查询、预览与错误
 
-```bash
-curl -sS -X POST http://127.0.0.1:<mcp-port>/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview_query_url","arguments":{}}}'
-```
+- asset_query_assets 大工程主动传 limit 与 fields；省略分页仍返回全部匹配项。
+- scene_execute_component_method 使用组件 dump UUID，不是节点 UUID；参数错误不能当作 (ok)。派发后的不确定失败保留冻结。
+- 预览 URL 首选 preview_query_url，次选 local_get_status；仅可使用项目明确声明的只读兜底。不猜 localhost:7456，不读取未声明的旧预览文件。
+- 浏览器验证在实际 URL 上追加唯一 tid，再观察游戏、Console 和受影响的交互。MCP 不提供浏览器自动化工具。
+- 不手改 .scene/.prefab/.anim/.meta 或引用来绕过能力缺口；纯 TypeScript 和文档按项目规则编辑。
+- 无法验证平台进程身份、私有权限或文件系统持久化能力时拒绝危险操作，不退化成 PID-only 或普通覆盖。
 
-## 预览 URL
-
-预览 URL 只允许来自：
-
-| 来源 | 说明 |
-|---|---|
-| `preview_query_url` | 首选 |
-| `local_get_status` | 查预览端口、MCP endpoint、编辑器状态 |
-| 项目文档明确声明的只读兜底文件 | 仅在 MCP 不通时使用 |
-
-没有项目文档声明时，不读取旧 `.dev/preview-url`，不猜 `localhost:7456`。
-
-浏览器验证必须在 MCP 返回的 URL 上追加唯一 `tid`：
-
-```text
-<preview_url>/?tid=<unique-id>
-```
-
-已有 query 时用 `&tid=`。本地服务器、测试账号、业务参数由项目文档声明。
-
-## 资源修改后刷新
-
-offline CLI 直接写磁盘，Cocos 编辑器不会自动感知。改完 `.prefab` / `.anim` / `.json` 等资源后，使用当前项目 MCP 刷新：
-
-| 修改范围 | 后续动作 |
-|---|---|
-| 单个资源 | `asset_reimport` 指定 `db://` 路径 |
-| 多个资源或不确定依赖 | `asset_refresh` 后 `preview_refresh_and_reload` |
-| 扩展代码 | `.dev/refresh` 写 `restart-package` |
-
-`.dev/refresh` 只承载 `restart-package`。
-
-`restart-package` 仍是无返回值的 fire-and-forget 信号。它只清除目标扩展目录（含软链真实目录）内的 Node 模块缓存，再调用 Creator Extension Manager reload，不得清除 Creator 或其他扩展的缓存。`local_reload_package` 返回 `state: "scheduled"`、`completionObserved: false` 和重载前 identity；调用方必须等待 router 重新发现实例，并确认 registry/status 的 `loadedAt` 已变化。只有 `loadedAt` 仍不变时，才完整重启 Creator。
-
-## CLI 与 MCP 分工
-
-| 操作 | 推荐入口 |
-|---|---|
-| 查 prefab 节点树 / 组件字段 | `prefab_query` 或 `cocos-mcp-cli query` |
-| 批量改 prefab | `prefab_edit` / `prefab_batch` 或 `cocos-mcp-cli batch` |
-| 查 `.anim` 轨道与关键帧 | `animation_query` 或 `cocos-mcp-cli anim query` |
-| 新建数值曲线 `.anim` | `animation_create` |
-| 查 AssetDB 资源信息 | `asset_query_assets` / `asset_query_info` |
-| 重导资源 | `asset_reimport` |
-| 查场景运行态节点 | `scene_query_node_tree` / `scene_query_node` |
-| 通过组件 UUID 调方法或改运行态属性 | `scene_execute_component_method` / `scene_set_property` |
-| 拿预览 URL | `preview_query_url` |
-| 刷新预览 | `preview_refresh_and_reload` |
-
-`meta_fix` 省略 `dryRun` 时默认等价于 `dryRun:true`。实际写入必须显式调用 `meta_fix({dryRun:false})`，并且调用前已经取得对应 `.meta` 的具体写入授权。
-
-`asset_query_assets` 可传 `offset`、`limit` 和 `fields` 控制响应；为兼容既有调用，省略分页参数仍返回全部匹配项。大工程应主动传 `limit` 和字段投影。
-
-direct HTTP server 与 router 都会在 handler/转发前检查 tool schema 顶层 `required` 字段；这不等于完整 JSON Schema 校验，selector 条件等仍由具体 tool 实现验证。
-
-`scene_execute_component_method.uuid` 使用 `scene_query_node` 组件 dump 中的 UUID，不使用节点 UUID；不存在的组件、方法或非数组 `args` 必须按 tool error 处理，不能把 `(ok)` 当作执行证据。
-
-结构化资源文件优先走 CLI 或 MCP tool。纯文本说明文档才直接编辑。
-
-## 浏览器验证
-
-MCP 负责拿 URL、重导资源、刷新预览；浏览器里真实业务页面的交互验证交给 Playwright / Chrome。
-
-推荐流程：
-
-```text
-preview_query_url
-browser_navigate -> <preview_url>/?tid=<unique-id>
-browser_evaluate
-browser_take_screenshot
-```
-
-## 失败处理
-
-按顺序排查：
-
-1. 没有匹配 `projectPath` 的注册文件：确认 Cocos 编辑器已打开当前项目，并且扩展已启用。
-2. `pid` 不存活：忽略该注册文件，等编辑器重新注册。
-3. HTTP MCP endpoint 不通：可用 `.dev/refresh` 的 `restart-package` 调度扩展 reload；若 endpoint 未恢复或 `loadedAt` 未更新，就完整重启编辑器。
-4. MCP 返回的预览 URL 为空：确认编辑器预览已启动。
-5. 工具行为异常或文档与实际不一致：反馈插件问题，由用户决定是否修插件本身。
+完整迁移、保证边界和诊断步骤见 [执行契约](doc/execution-contract.md)。发现插件缺陷时保留复现并报告，修复产品代码需要具体任务授权；提交、版本、发布、安装、激活各自独立。

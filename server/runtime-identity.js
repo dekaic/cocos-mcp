@@ -96,6 +96,10 @@ function hashToolSchemas(tools) {
             name: tool.name,
             description: tool.description || '',
             inputSchema: sortObject(tool.inputSchema || {}),
+            outputSchema: sortObject(tool.outputSchema),
+            title: tool.title,
+            annotations: sortObject(tool.annotations),
+            _meta: sortObject(tool._meta),
         };
     }).sort(function (a, b) { return a.name.localeCompare(b.name); });
     return crypto.createHash('sha256').update(JSON.stringify(stable)).digest('hex');

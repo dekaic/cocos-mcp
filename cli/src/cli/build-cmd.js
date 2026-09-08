@@ -5,9 +5,8 @@
 //   CocosCreator --project <path> --build "configPath=<json>"
 //   CocosCreator --project <path> --build "platform=<plat>;debug=<bool>"
 //
-// 退出码：Cocos 退出非 0 常见于 postBuild 阶段的资源警告等非致命问题（主构建其实成功）。
-//   默认照产物存在性判定：产物齐了就退 0（成功），产物缺才透传 Cocos 退出码（失败）。
-//   --strict 关掉这个兜底；Creator 定义的成功码 0/36 归一为 0，其余退出码透传。
+// 退出码：仅 Creator 0/36 归一为成功；旧产物不覆盖失败或未知后果。
+// --strict 保留为兼容参数，所有模式均采用上述判定与项目执行门禁。
 //
 // 用法：
 //   cocos-mcp-cli build --project <path> --version 3.8.8 --config <buildConfig.json>
@@ -21,6 +20,10 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { executeLifecycle } = require('../runtime/lifecycle');
+const { unwrap } = require('../runtime/transactions');
+const { assertClosed } = require('../runtime/processes');
+const { hash, fault } = require('../runtime/identity');
 
 function die(msg) { process.stderr.write('Error: ' + msg + '\n'); process.exit(1); }
 
@@ -36,6 +39,7 @@ function parseArgs(rest) {
         else if (k === '--debug') a.debug = true;
         else if (k === '--dry-run') a.dryRun = true;
         else if (k === '--strict') a.strict = true;
+        else if (k === '--operation-id') a.operationId = rest[++i];
         else die(`未知参数 "${k}"。用法见 cocos-mcp-cli build --help`);
     }
     return a;
@@ -67,7 +71,7 @@ function resolveCocos(a) {
     die('需指定 CocosCreator 可执行：--cocos <path> 或 --version <如 3.8.8>');
 }
 
-// 退出非 0 时按产物存在性判定主构建是否成功。true=产物齐 / false=产物缺 / null=无法定位产物目录
+// 只报告产物存在性，不将旧产物用作本次构建成功的证据。
 function checkArtifact(a) {
     let outDir;
     if (a.platform) {
@@ -86,7 +90,7 @@ function checkArtifact(a) {
     return ['index.html', 'game.json', 'application.js'].some(function (m) { return fs.existsSync(path.join(outDir, m)); });
 }
 
-function cmdBuild(rest) {
+async function cmdBuild(rest) {
     if (rest[0] === '--help' || rest[0] === '-h') {
         process.stdout.write(
             'cocos-mcp-cli build — Cocos 命令行打包（headless）\n\n' +
@@ -97,7 +101,8 @@ function cmdBuild(rest) {
             '  --platform <plat>      或按平台构建（→ --build "platform=<plat>"），如 web-mobile / alipay-mini-game\n' +
             '  --debug                平台构建时 debug=true（默认 false）\n' +
             '  --dry-run              只打印将执行的命令，不真跑\n' +
-            '  --strict               不做产物兜底；Creator 成功码 0/36 退 0，其余退出码透传\n\n' +
+            '  --operation-id <id>    正式构建必填；目标 Creator 须关闭，重试先查询同一操作\n' +
+            '  --strict               保留参数；所有模式仅 0/36 成功，其他后果需检查\n\n' +
             '示例:\n' +
             '  cocos-mcp-cli build -p /path/to/forest -v 3.8.8 --config /path/build.json\n' +
             '  cocos-mcp-cli build -p /path/to/forest -v 3.8.8 --platform web-mobile --dry-run\n');
@@ -113,6 +118,7 @@ function cmdBuild(rest) {
 
     let buildArg;
     if (a.config) {
+        a.config = path.resolve(a.config);
         if (!fs.existsSync(a.config)) die(`--config 文件不存在: ${a.config}`);
         buildArg = `configPath=${a.config}`;
     } else {
@@ -126,28 +132,25 @@ function cmdBuild(rest) {
         return;
     }
 
-    process.stdout.write('Cocos CLI build 启动（headless，可能耗时几分钟）:\n  --project ' + a.project + '\n  --build "' + buildArg + '"\n\n');
-    const child = spawn(cocos, argv, { stdio: 'inherit' });
-    child.on('error', function (e) { die('启动 Cocos 失败: ' + e.message); });
-    child.on('exit', function (code) {
-        if (code === 0 || code === 36) {
-            process.stdout.write('\nCocos 退出码: ' + code + ' — 构建成功\n');
-            process.exit(0);
+    const configHash = a.config ? hash(fs.readFileSync(a.config)) : null;
+    const record = await executeLifecycle('cli_build', { projectPath: path.resolve(a.project), operationId: a.operationId,
+        execPath: cocos, buildArg, strict: a.strict, configHash,
+    }, { assertTarget: () => {
+        assertClosed(path.resolve(a.project));
+        if (a.config && hash(fs.readFileSync(a.config)) !== configHash) throw fault('INPUT_CHANGED', 'Build config changed before execution: ' + a.config);
+    } }, async entry => {
+        const child = spawn(cocos, argv, { stdio: 'inherit' });
+        const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); });
+        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+        entry.child(child.pid);
+        const result = await exited;
+        const artifactPresent = checkArtifact(a);
+        if (result.code !== 0 && result.code !== 36) {
+            throw new Error('Creator exited with code ' + result.code + '; partial build side effects require inspection. Existing artifacts do not prove this build succeeded.');
         }
-        const arti = a.strict ? null : checkArtifact(a);
-        if (arti === true) {
-            process.stdout.write('\nCocos 退出码: ' + code + '（非 0），但产物已生成 → 判定主构建成功（非 0 多为 postBuild 资源警告等非致命问题）。\n');
-            process.exit(0);
-        }
-        if (arti === false) {
-            process.stdout.write('\nCocos 退出码: ' + code + '，产物未生成 → 构建失败。\n');
-            process.exit(code == null ? 1 : code);
-        }
-        // null：--strict 或无法定位产物目录（如 --config 解析失败）→ 透传
-        process.stdout.write('\nCocos 退出码: ' + (code == null ? '(被信号终止)' : code) +
-            (a.strict ? '（--strict，透传）' : '（无法定位产物目录，透传）') + '\n');
-        process.exit(code == null ? 1 : code);
+        return { action: 'build', creatorExitCode: result.code, artifactPresent };
     });
+    process.stdout.write(JSON.stringify(unwrap(record), null, 2) + '\n');
 }
 
 module.exports = { cmdBuild };

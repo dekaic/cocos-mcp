@@ -5,7 +5,8 @@
 
 'use strict';
 
-const fs = require('fs');
+const { runOffline } = require('./runtime/transactions');
+const { projectForFile, contained } = require('./runtime/identity');
 
 /**
  * 探测原始文件的缩进单位（空格数）
@@ -35,7 +36,7 @@ function detectTrailingNewline(raw) {
  * @param {object[]} data           修改后的 elements 数组
  * @param {string} originalRaw      原始文件内容（用于探测格式）
  */
-function writePrefab(filePath, data, originalRaw) {
+function formatPrefab(data, originalRaw) {
   if (!Array.isArray(data)) {
     throw new Error('writePrefab: data 必须是数组');
   }
@@ -51,7 +52,15 @@ function writePrefab(filePath, data, originalRaw) {
     newRaw += '\n';
   }
 
-  fs.writeFileSync(filePath, newRaw, 'utf8');
+  return newRaw;
 }
 
-module.exports = { writePrefab, detectIndent, detectTrailingNewline };
+function writePrefab(filePath, data, originalRaw, options = {}) {
+  const projectRoot = projectForFile(filePath, options.projectRoot);
+  filePath = contained(projectRoot, filePath);
+  return runOffline(projectRoot, 'write_prefab', { filePath, data, originalRaw }, options, plan => {
+    plan.write(filePath, formatPrefab(data, originalRaw));
+    return {};
+  });
+}
+module.exports = { writePrefab, formatPrefab, detectIndent, detectTrailingNewline };

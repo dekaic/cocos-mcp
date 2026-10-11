@@ -131,10 +131,10 @@ function resolvePreviewPort(projectPath, pid) {
         if (info && Number.isInteger(info.previewPort) && info.previewPort > 0 && info.previewPort <= 65535 &&
             (pid === undefined || info.editorPid === pid)) return info.previewPort;
     } catch (e) { /* 没装 dev-reload 扩展或文件未生成 */ }
-    throw identity.fault('PREVIEW_STATE_UNAVAILABLE', 'Cannot verify the target preview port; inspect the exact Creator before explicitly overriding only the preview-session prompt');
+    throw identity.fault('PREVIEW_STATE_UNAVAILABLE', 'Cannot verify the target preview port; inspect the exact Creator and preserve unsaved edits. Missing metadata does not prove the preview is idle.');
 }
 
-/** 数编辑器进程预览端口上的 ESTABLISHED 连接数（0 = 没有调试现场）。 */
+/** Count preview connections; this cannot determine their task or user ownership. */
 function countPreviewConnections(pid, previewPort) {
     try {
         if (process.platform === 'win32') {
@@ -152,12 +152,22 @@ function countPreviewConnections(pid, previewPort) {
 /** restart/kill 前的现场闸门：有活跃预览连接且没传 force 就抛错。 */
 function assertNoDebugSession(action, target, force) {
     if (force) return;
-    var port = resolvePreviewPort(target.projectPath, target.pid);
-    var n = countPreviewConnections(target.pid, port);
+    const observedTarget = { projectPath: target.projectPath, instanceId: target.instanceId, pid: target.pid, processIdentity: target.processIdentity };
+    var port;
+    var n;
+    try {
+        port = resolvePreviewPort(target.projectPath, target.pid);
+        n = countPreviewConnections(target.pid, port);
+    } catch (error) {
+        error.details = { target: observedTarget, preview: { port, connections: null, ownership: 'unknown' } };
+        throw error;
+    }
     if (n > 0) {
-        throw new Error(
-            action + ': 预览端口 ' + port + ' 上有 ' + n + ' 条活跃连接 —— 用户或其他 agent 正开着游戏预览/引导编辑器调试，现在动编辑器会打断现场。\n' +
-            '请先与用户确认；确认后重试并显式传 force:true。'
+        throw identity.fault('PREVIEW_IN_USE',
+            action + ': preview port ' + port + ' has ' + n + ' active connections; ownership is unknown. ' +
+            'Close only previews verified as created by this task, then recheck. Reuse existing authorization covering interruption of this exact preview; ' +
+            'otherwise obtain that authorization before using force:true. Preserve unsaved edits; force never overrides execution protection.',
+            { target: observedTarget, preview: { port, connections: n, ownership: 'unknown' } }
         );
     }
 }
@@ -257,11 +267,11 @@ const EDITOR_TOOLS = [
     } },
     { name: 'editor_restart', description: 'Restart one exact process/service generation. No cold-start fallback. Timeout is not cancellation.', properties: {
         ...targetProperties, hard: { type: 'boolean' }, noLogin: { type: 'boolean', default: true }, timeoutMs: { type: 'number', minimum: 1 },
-        force: { type: 'boolean', description: 'Only bypasses the existing preview-session prompt; never identity, locks, unknown or transaction protection.' },
+        force: { type: 'boolean', description: 'Use only with authorization covering interruption of this exact preview. Reuse existing authorization; prefer closing this task\'s own preview first. Only bypasses preview inspection, never identity, locks, unknown or transactions; does not preserve unsaved edits.' },
     } },
     { name: 'editor_kill', description: 'Close one exact Creator process. Cannot override project freeze or lock ownership.', properties: {
         ...targetProperties, hard: { type: 'boolean' }, graceMs: { type: 'number', minimum: 1 },
-        force: { type: 'boolean', description: 'Only the preview-session prompt, never execution protection.' },
+        force: { type: 'boolean', description: 'Use only with authorization covering interruption of this exact preview. Reuse existing authorization; prefer closing this task\'s own preview first. Only bypasses preview inspection, never identity, locks, unknown or transactions; does not preserve unsaved edits.' },
     } },
     { name: 'editor_wait_ready', description: 'Authenticated readiness of an explicitly specified project/generation. Does not resolve unknown operations.', properties: {
         projectPath: targetProperties.projectPath, instanceId: targetProperties.instanceId, timeoutMs: { type: 'number', minimum: 1 }, excludeInstanceId: { type: 'string' },

@@ -170,7 +170,7 @@ test('countPreviewConnections sees an established connection on own process', as
     assert.equal(countPreviewConnections(process.pid, port), 0);
 });
 
-test('assertNoDebugSession throws on active connections unless forced', async () => {
+test('assertNoDebugSession throws on active connections unless forced', async t => {
     const dir = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'cc-mcp-gate-'));
     const srv = net.createServer(() => {});
     await new Promise((r) => srv.listen(0, '127.0.0.1', r));
@@ -178,19 +178,70 @@ test('assertNoDebugSession throws on active connections unless forced', async ()
     fs.mkdirSync(pathMod.join(dir, '.dev'));
     fs.writeFileSync(pathMod.join(dir, '.dev', 'dev-reload-info.json'), JSON.stringify({ previewPort: port, editorPid: process.pid }));
     const client = net.connect(port, '127.0.0.1');
+    t.after(() => { client.destroy(); srv.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     await new Promise((r) => client.on('connect', r));
 
-    const target = { pid: process.pid, projectPath: dir };
-    assert.throws(() => assertNoDebugSession('editor_restart', target, false), /正开着游戏预览/);
+    const target = { pid: process.pid, projectPath: dir, instanceId: 'preview-generation', processIdentity: { pid: process.pid, startId: 'preview-start' } };
+    assert.throws(() => assertNoDebugSession('editor_restart', target, false), error => {
+        assert.equal(error.code, 'PREVIEW_IN_USE');
+        assert.deepEqual(error.details.target, target);
+        assert.equal(error.details.preview.ownership, 'unknown');
+        assert.equal(error.details.preview.port, port);
+        assert.ok(error.details.preview.connections > 0);
+        assert.doesNotMatch(error.message, /请先与用户确认|用户或其他 agent 正开着/);
+        return true;
+    });
     assert.doesNotThrow(() => assertNoDebugSession('editor_restart', target, true), 'force bypasses gate');
 
     client.destroy();
     await new Promise((r) => srv.close(r));
+    assert.doesNotThrow(() => assertNoDebugSession('editor_restart', target, false), 'closing the owned connection clears the preview gate without force');
     fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('missing preview state does not prove there are no debug connections', () => {
     assert.throws(() => assertNoDebugSession('editor_kill', { pid: process.pid, projectPath: '/no/such/project' }, false), { code: 'PREVIEW_STATE_UNAVAILABLE' });
+});
+
+test('preview inspection failure retains target diagnostics in durable lifecycle results', async t => {
+    const identity = require('../../cli/src/runtime/identity');
+    const owner = identity.processIdentity();
+    const target = { pid: owner.pid, processIdentity: owner, instanceId: 'preview-inspection', projectPath: fixture.projectRoot };
+    t.mock.method(require('../../cli/src/runtime/registry'), 'readRegistry', () => [target]);
+    const { handleEditorToolCall } = require('../src/editor-control');
+    const args = { projectPath: fixture.projectRoot, instanceId: target.instanceId, operationId: 'preview-inspection' };
+    const response = await handleEditorToolCall('editor_kill', args, { store: fixture.store });
+    const control = response.structuredContent.cocosMcpControl;
+    assert.equal(control.code, 'PREVIEW_STATE_UNAVAILABLE');
+    assert.deepEqual(control.blockers.target, target);
+    assert.equal(control.blockers.preview.connections, null);
+    assert.equal(control.blockers.preview.ownership, 'unknown');
+    assert.deepEqual(control.effects, { changed: false, written: false });
+    assert.deepEqual(await handleEditorToolCall('editor_kill', args, { store: fixture.store }), response);
+    assert.doesNotThrow(() => fixture.store.gate(fixture.projectRoot));
+});
+
+test('force cannot bypass stale identity, another executor or an unknown operation', async t => {
+    const identity = require('../../cli/src/runtime/identity');
+    const owner = identity.processIdentity();
+    const target = { pid: owner.pid, processIdentity: owner, instanceId: 'force-protection', projectPath: fixture.projectRoot };
+    t.mock.method(require('../../cli/src/runtime/registry'), 'readRegistry', () => [target]);
+    const { handleEditorToolCall } = require('../src/editor-control');
+    const dir = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'cocos-force-state-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const store = require('../../cli/src/runtime/operations').createStore({ stateRoot: dir });
+    const args = { projectPath: target.projectPath, instanceId: target.instanceId, force: true };
+    await assert.rejects(handleEditorToolCall('editor_kill', { ...args, instanceId: 'stale', operationId: 'stale' }, { store }), { code: 'TARGET_STALE' });
+    target.processIdentity = { ...owner, startId: 'reused-pid' };
+    await assert.rejects(handleEditorToolCall('editor_kill', { ...args, operationId: 'reused' }, { store }), { code: 'TARGET_STALE' });
+    target.processIdentity = owner;
+    let finish;
+    const running = store.execute({ projectPath: target.projectPath, operationId: 'other', tool: 'test', args: {} }, () => new Promise(resolve => { finish = resolve; }));
+    await assert.rejects(handleEditorToolCall('editor_kill', { ...args, operationId: 'busy' }, { store }), { code: 'PROJECT_BUSY' });
+    finish({});
+    await running;
+    await store.execute({ projectPath: target.projectPath, operationId: 'unknown', tool: 'test', args: {} }, () => { throw new Error('execution outcome unknown'); });
+    await assert.rejects(handleEditorToolCall('editor_kill', { ...args, operationId: 'frozen' }, { store }), { code: 'PROJECT_FROZEN' });
 });
 
 test('waitReady performs authenticated initialization and verifies actual service identity', async t => {

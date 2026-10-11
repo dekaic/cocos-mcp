@@ -49,7 +49,8 @@ function control(code, context = {}) {
         structuredContent: { cocosMcpControl: value }, isError: !pending, _meta: { cocosMcp: value } };
 }
 function fromRecord(record) {
-    if (record.state !== 'succeeded') return control(record.result && record.result.code || 'OPERATION_' + record.state.toUpperCase(), record);
+    if (record.state !== 'succeeded') return control(record.result && record.result.code || 'OPERATION_' + record.state.toUpperCase(),
+        { ...record, blockers: record.blockers || record.result && record.result.blockers });
     const result = normalize(record.result);
     return { ...result, _meta: { ...(result._meta || {}), cocosMcp: { state: record.state, operationId: record.operationId,
         projectPath: record.projectPath, originalTarget: record.originalTarget, effects: record.effects } } };

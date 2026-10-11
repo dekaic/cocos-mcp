@@ -171,7 +171,8 @@ function createStore(options = {}) {
     }
     function failed(entry, error, synchronous) {
         if (storage.read(path.join(entry.directory, 'terminal.json'))) return readStatus(entry.directory);
-        if (error[SAFE_FAILURE]) return finish(entry, 'failed', { code: error.code || 'EXECUTION_FAILED', message: error.message }, { changed: false, written: false });
+        if (error[SAFE_FAILURE]) return finish(entry, 'failed', { code: error.code || 'EXECUTION_FAILED', message: error.message,
+            ...(error.details ? { blockers: error.details } : {}) }, { changed: false, written: false });
         storage.publish(path.join(entry.directory, 'uncertain.json'), { role: 'executor', owner: entry.owner,
             code: error.code || 'EXECUTION_UNCERTAIN', reason: error.message, at: new Date().toISOString() });
         if (synchronous && error.code !== 'INVALID_EXECUTOR') {

@@ -77,8 +77,9 @@ function commit(store, entry, plan, result, checkpoint) {
     for (const change of changes) {
         if (readDisk(change.file).hash !== hash(change.after)) throw fault('BASELINE_CONFLICT', 'Resource changed before final commit: ' + change.file);
     }
+    const changedFiles = new Set(changes.map(change => change.file));
     for (const [file, before] of plan.baseline) {
-        if (plan.filename(file) !== file || !plan.staged.has(file) && readDisk(file).hash !== before.hash) throw fault('BASELINE_CONFLICT', 'Dependency changed before final commit: ' + file);
+        if (plan.filename(file) !== file || !changedFiles.has(file) && readDisk(file).hash !== before.hash) throw fault('BASELINE_CONFLICT', 'Dependency changed before final commit: ' + file);
     }
     checkpoint('verified');
     storage.publish(path.join(directory, 'COMMITTED.json'), { planHash: hash(JSON.stringify(manifest)),

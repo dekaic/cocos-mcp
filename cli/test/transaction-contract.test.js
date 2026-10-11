@@ -24,6 +24,92 @@ function execute(f, options = {}) {
         return { saved: true };
     });
 }
+
+for (const staged of [false, true]) {
+    for (const externalChange of [false, true]) {
+        test(`final verification includes unchanged dependencies (staged=${staged}, external=${externalChange})`, t => {
+            const f = fixture(t);
+            const before = fs.statSync(f.a, { bigint: true });
+            const run = () => runOffline(f.projectPath, 'test_dependency', {}, {
+                store: f.store, operationId: 'dependency',
+                checkpoint: label => {
+                    if (externalChange && label === 'after-publish:0') fs.writeFileSync(f.a, 'external edit');
+                },
+            }, plan => {
+                const bytes = plan.read(f.a);
+                if (staged) plan.write(f.a, bytes);
+                plan.write(f.b, 'meta', { create: true });
+                return {};
+            });
+            if (!externalChange) {
+                assert.equal(run().written, true);
+                const after = fs.statSync(f.a, { bigint: true });
+                assert.equal(after.ino, before.ino);
+                assert.equal(after.mtimeNs, before.mtimeNs);
+                assert.equal(fs.readFileSync(f.a, 'utf8'), 'before');
+                return;
+            }
+            assert.throws(run, { code: 'OPERATION_UNKNOWN' });
+            const record = f.store.status(f.projectPath, 'dependency');
+            assert.equal(record.state, 'unknown');
+            assert.equal(record.unresolved, true);
+            assert.match(record.message, /Dependency changed before final commit/);
+            const failure = JSON.parse(fs.readFileSync(path.join(f.store.operationDirectory(f.projectPath, 'dependency'), 'uncertain.json'), 'utf8'));
+            assert.equal(failure.code, 'BASELINE_CONFLICT');
+            const directory = path.join(f.store.projectDirectory(f.projectPath), 'transactions', record.transactionId);
+            assert.equal(fs.existsSync(path.join(directory, 'COMMITTED.json')), false);
+            assert.equal(f.store.pendingTransactions(f.projectPath).length, 1);
+            assert.throws(() => f.store.gate(f.projectPath), { code: 'PROJECT_FROZEN' });
+            assert.equal(fs.readFileSync(f.b, 'utf8'), 'meta');
+            const preview = recover(f.projectPath, record.transactionId, { store: f.store });
+            assert.equal(preview.action, 'rollback');
+            assert.equal(preview.written, false);
+            assert.equal(fs.existsSync(f.b), true);
+            const recovery = recover(f.projectPath, record.transactionId, {
+                store: f.store, dryRun: false, operationId: 'recover-dependency',
+            });
+            assert.equal(recovery.action, 'rolled_back');
+            assert.equal(fs.existsSync(f.b), false);
+            assert.equal(fs.readFileSync(f.a, 'utf8'), 'external edit');
+            assert.equal(f.store.status(f.projectPath, 'dependency').unresolved, false);
+            assert.equal(f.store.pendingTransactions(f.projectPath).length, 0);
+        });
+    }
+}
+
+test('fixMeta no-op staging retains dependency verification after another meta is published', t => {
+    const f = fixture(t);
+    const cp = require('node:child_process');
+    const git = args => cp.execFileSync('git', ['-C', f.projectPath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const unchanged = path.join(f.projectPath, 'assets', 'mode-only.meta');
+    const reordered = f.b;
+    const head = '{"uuid":"test","userData":{}}\n';
+    fs.writeFileSync(unchanged, head, { mode: 0o644 });
+    fs.writeFileSync(reordered, head);
+    git(['init', '-q']);
+    git(['config', 'core.fileMode', 'true']);
+    git(['add', '.']);
+    git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']);
+    fs.chmodSync(unchanged, 0o755);
+    fs.writeFileSync(reordered, '{"userData":{},"uuid":"test"}\n');
+    assert.match(git(['diff', '--name-only']), /mode-only\.meta/);
+    assert.equal(fs.readFileSync(unchanged, 'utf8'), git(['show', 'HEAD:assets/mode-only.meta']));
+    assert.throws(() => require('../src/editor/fix-meta').fixMeta(f.projectPath, {
+        store: f.store, operationId: 'fix-meta-dependency', dryRun: false,
+        checkpoint: label => {
+            if (label === 'after-publish:0') fs.writeFileSync(unchanged, '{"external":true}\n');
+        },
+    }), { code: 'OPERATION_UNKNOWN' });
+    const record = f.store.status(f.projectPath, 'fix-meta-dependency');
+    assert.match(record.message, /Dependency changed before final commit/);
+    const directory = path.join(f.store.projectDirectory(f.projectPath), 'transactions', record.transactionId);
+    const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'plan.json'), 'utf8'));
+    assert.ok(manifest.baselines.some(file => file.file === 'assets/mode-only.meta'));
+    assert.deepEqual(manifest.files.map(file => file.file), ['assets/b.json.meta']);
+    assert.equal(fs.existsSync(path.join(directory, 'COMMITTED.json')), false);
+    assert.equal(fs.readFileSync(reordered, 'utf8'), head);
+    assert.equal(fs.readFileSync(unchanged, 'utf8'), '{"external":true}\n');
+});
 test('ensure-meta followed by add-component resolves virtual metadata without writing during preview', t => {
     const f = fixture(t);
     const file = path.join(f.projectPath, 'assets', 'Example.prefab');

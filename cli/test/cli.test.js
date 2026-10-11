@@ -235,6 +235,22 @@ test('CLI set active false: 写入后解析 elements 验证 _active=false', () =
 
 // ─── batch ───────────────────────────────────────────────────
 
+test('CLI batch: 超大指数数值在写入与预演中均拒绝', (t) => {
+  const file = tmpCopy();
+  const opsFile = path.join(PROJECT_ROOT, 'overflow-ops.json');
+  t.after(() => { fs.rmSync(file, { force: true }); fs.rmSync(opsFile, { force: true }); });
+  const before = fs.readFileSync(file);
+  for (const number of ['1e400', '-1e400']) {
+    fs.writeFileSync(opsFile, `[{"op":"set-position","node":"touchArea","x":${number},"y":0}]`);
+    for (const dryRun of [false, true]) {
+      const result = run(['batch', file, opsFile, ...(dryRun ? ['--dry-run'] : [])]);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /非有限数/);
+      assert.deepEqual(fs.readFileSync(file), before);
+    }
+  }
+});
+
 test('CLI batch: 批量 set-active + set-position 写入并验证', () => {
   const tmp = tmpCopy();
   const opsFile = path.join(os.tmpdir(), `ops-${Date.now()}.json`);

@@ -12,6 +12,8 @@
 
 'use strict';
 
+const { assertFiniteNumbers } = require('../write.js');
+
 // 类型令牌：
 //   'number' | 'string' | 'boolean' | 'object' | 'array' | 'any'
 //   'node-selector'  — 字符串 / 数字 / { id, path } 三选一
@@ -159,6 +161,7 @@ function _formatType(token) {
 
 function _checkType(value, token) {
   if (token === 'any') return true;
+  if (token === 'number') return Number.isFinite(value);
   if (token === 'node-selector') {
     if (typeof value === 'string') return value.length > 0;
     if (typeof value === 'number') return Number.isInteger(value) && value >= 0;
@@ -178,6 +181,7 @@ function _checkType(value, token) {
 }
 
 function validateOps(ops, knownOpTypes) {
+  assertFiniteNumbers(ops, 'ops');
   const errors = [];
 
   for (let i = 0; i < ops.length; i++) {

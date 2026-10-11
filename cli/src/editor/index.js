@@ -11,7 +11,7 @@
 'use strict';
 
 const { parsePrefab } = require('../parse.js');
-const { formatPrefab } = require('../write.js');
+const { formatPrefab, assertFiniteNumbers } = require('../write.js');
 const { runOffline } = require('../runtime/transactions');
 const { projectForFile, contained } = require('../runtime/identity');
 const { computeDiff } = require('./diff.js');
@@ -157,6 +157,7 @@ function editPrefab(filePath, ops, options) {
   }
 
   // A semantic no-op preserves the original bytes, including compact JSON and formatting.
+  assertFiniteNumbers(prefabData.elements);
   if (JSON.stringify(JSON.parse(prefabData.raw)) !== JSON.stringify(prefabData.elements)) {
     plan.write(filePath, formatPrefab(prefabData.elements, prefabData.raw));
   }

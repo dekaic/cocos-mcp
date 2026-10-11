@@ -8,6 +8,17 @@
 const { runOffline } = require('./runtime/transactions');
 const { projectForFile, contained } = require('./runtime/identity');
 
+function assertFiniteNumbers(value, location = 'data') {
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error(`${location}: 非有限数 ${String(value)} 无法保存为 JSON 数值`);
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      assertFiniteNumbers(child, `${location}.${key}`);
+    }
+  }
+}
+
 /**
  * 探测原始文件的缩进单位（空格数）
  * 取所有以空格开头的行中最小缩进数
@@ -44,6 +55,7 @@ function formatPrefab(data, originalRaw) {
     throw new Error('writePrefab: originalRaw 必须是字符串');
   }
 
+  assertFiniteNumbers(data);
   const indent = detectIndent(originalRaw);
   const trailingNewline = detectTrailingNewline(originalRaw);
 
@@ -63,4 +75,4 @@ function writePrefab(filePath, data, originalRaw, options = {}) {
     return {};
   });
 }
-module.exports = { writePrefab, formatPrefab, detectIndent, detectTrailingNewline };
+module.exports = { writePrefab, formatPrefab, detectIndent, detectTrailingNewline, assertFiniteNumbers };

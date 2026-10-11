@@ -172,7 +172,7 @@ node bin/cocos-mcp-cli.js diff old.prefab new.prefab
 
 从零创建一个新 prefab + 配套 `.prefab.meta`。`output-path` 不带 `.prefab` 后缀会自动补全。
 
-`uuid` / `fileId` 沿用以 `create-prefab:<name>` 为种子的确定性规则，但新建目标已经存在时拒绝覆盖。相同操作 ID 的重试返回原记录，不重新创建；新逻辑操作不能用“可重入”绕过存在性检查。
+每个新资产使用独立的随机 `uuid`，不同目录或显式使用相同 `--name` 不会因名称相同而共享资产身份。Prefab 内部的 `fileId` 仍以 `create-prefab:<name>` 为种子生成。新建目标已经存在时拒绝覆盖，不修改已有资产 UUID 或引用。相同操作 ID、相同请求的重试返回原记录，不重新创建或生成 UUID；新逻辑操作不能用“可重入”绕过存在性检查。`--dry-run` 输出的 UUID 仅属于当次预演，不保证与正式创建相同。
 
 | flag | 默认 | 说明 |
 |---|---|---|

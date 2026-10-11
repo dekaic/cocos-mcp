@@ -45,6 +45,72 @@ function tmpExitExecutable(code) {
   return { dir, executable };
 }
 
+for (const explicitName of [false, true]) {
+  test(`CLI create-prefab: ${explicitName ? '显式同名' : '不同目录同名'}资产具有独立 UUID`, (t) => {
+    const dir = fs.mkdtempSync(path.join(PROJECT_ROOT, 'assets', 'create-prefab-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const existing = fs.readFileSync(FIXTURE);
+    const uuids = [];
+    for (const folder of ['ui', 'world']) {
+      fs.mkdirSync(path.join(dir, folder));
+      const output = path.join(dir, folder, (explicitName ? folder : 'Button') + '.prefab');
+      const args = ['create-prefab', output];
+      if (explicitName) args.push('--name', 'Button');
+      const result = run(args);
+      assert.equal(result.status, 0, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.written, true);
+      assert.deepEqual(report.created, [output, output + '.meta']);
+      const data = JSON.parse(fs.readFileSync(output, 'utf8'));
+      const meta = JSON.parse(fs.readFileSync(output + '.meta', 'utf8'));
+      assert.equal(data[0]._name, 'Button');
+      assert.equal(data[1]._name, 'Button');
+      assert.equal(meta.userData.syncNodeName, 'Button');
+      assert.match(meta.uuid, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      uuids.push(meta.uuid);
+    }
+    assert.notEqual(uuids[0], uuids[1], '独立资产不能共享 UUID');
+    assert.deepEqual(fs.readFileSync(FIXTURE), existing, '已有资产及其引用应保持不变');
+  });
+}
+
+test('CLI create-prefab: 同操作重试保持原 UUID 和字节，新操作拒绝覆盖', (t) => {
+  const dir = fs.mkdtempSync(path.join(PROJECT_ROOT, 'assets', 'create-prefab-retry-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const output = path.join(dir, 'Button.prefab');
+  const args = ['create-prefab', output, '--operation-id', require('crypto').randomUUID()];
+  const first = run(args);
+  assert.equal(first.status, 0, first.stderr);
+  const snapshot = [output, output + '.meta'].map(file => ({
+    bytes: fs.readFileSync(file),
+    stat: fs.statSync(file, { bigint: true }),
+  }));
+  const retry = run(args);
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.deepEqual(JSON.parse(retry.stdout), JSON.parse(first.stdout));
+  const overwrite = run(['create-prefab', output]);
+  assert.notEqual(overwrite.status, 0);
+  assert.match(overwrite.stderr, /Refusing to overwrite existing resource/);
+  for (const [index, file] of [output, output + '.meta'].entries()) {
+    assert.deepEqual(fs.readFileSync(file), snapshot[index].bytes);
+    const stat = fs.statSync(file, { bigint: true });
+    assert.equal(stat.ino, snapshot[index].stat.ino);
+    assert.equal(stat.mtimeNs, snapshot[index].stat.mtimeNs);
+  }
+});
+
+test('CLI create-prefab: dry-run 预演不创建资源', (t) => {
+  const dir = fs.mkdtempSync(path.join(PROJECT_ROOT, 'assets', 'create-prefab-preview-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const output = path.join(dir, 'Button.prefab');
+  const result = run(['create-prefab', output, '--dry-run']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /=== META ===/);
+  assert.match(result.stdout, /"written": false/);
+  assert.equal(fs.existsSync(output), false);
+  assert.equal(fs.existsSync(output + '.meta'), false);
+});
+
 test('CLI fix-meta help describes preview defaults and explicit closed-project application', () => {
   const result = run(['fix-meta', '--help']);
   assert.equal(result.status, 0, result.stderr);

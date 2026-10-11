@@ -24,7 +24,8 @@
 
 const { resourceCommand } = require('./resource-command');
 const path = require('path');
-const { deterministicUUID, deterministicFileId } = require('../id.js');
+const { randomUUID } = require('crypto');
+const { deterministicFileId } = require('../id.js');
 const {
   makePrefabRoot,
   makeNode,
@@ -86,9 +87,10 @@ function planCreatePrefab(argv, plan) {
   if (width === null) width = spineSkelUuid ? 100 : 750;
   if (height === null) height = spineSkelUuid ? 100 : 200;
 
-  // 确定性 ID（以名称为种子，保证同名 prefab 每次生成相同 UUID）
+  // 新资产使用独立 UUID；同一操作的重试由事务记录复用原结果。
+  const prefabUuid = randomUUID();
+  // fileId 仅在 prefab 内定位节点和组件，继续以名称为种子。
   const seed = `create-prefab:${name}`;
-  const prefabUuid = deterministicUUID(`${seed}:uuid`);
   const rootFileId = deterministicFileId(`${seed}:root:fid`);
   const uitransformFileId = deterministicFileId(`${seed}:uitransform:fid`);
 

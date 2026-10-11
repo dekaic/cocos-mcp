@@ -202,6 +202,16 @@ function validateOps(ops, knownOpTypes) {
 
     const known = new Set(['op', ...schema.required, ...schema.optional]);
 
+    if (known.has('property') && op.property !== undefined) {
+      const path = Array.isArray(op.property) ? op.property
+        : op.op === 'set-component-ref' && typeof op.property === 'string'
+          ? op.property.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean)
+          : [op.property];
+      if (path.some(part => ['__proto__', 'prototype', 'constructor'].includes(part))) {
+        errors.push(`${prefix} (${op.op}): 不安全的 property 路径 ${JSON.stringify(op.property)}`);
+      }
+    }
+
     // 必填检查
     for (const r of schema.required) {
       if (!(r in op)) {

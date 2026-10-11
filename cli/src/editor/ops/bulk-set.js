@@ -46,7 +46,7 @@ function _setNested(obj, path, value) {
   let cur = obj;
   for (let i = 0; i < path.length - 1; i++) {
     const k = path[i];
-    if (cur[k] === null || cur[k] === undefined || typeof cur[k] !== 'object') {
+    if (!Object.hasOwn(cur, k) || cur[k] === null || cur[k] === undefined || typeof cur[k] !== 'object') {
       throw new Error(
         `bulk-set: 路径 ${path.slice(0, i + 1).join('.')} 不是对象（${JSON.stringify(cur[k])}），无法继续下钻`
       );

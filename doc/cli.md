@@ -14,6 +14,8 @@ prefab 是 JSON 数组，`__id__` 是数组下标。不要用字符串替换、�
 
 当前修复工作树遵守 [执行与迁移契约](./execution-contract.md)：正式写入要求 Creator 关闭、目标位于真实项目内，并提供 `--operation-id`；查询与 `--dry-run` 可在线。以下 op 配方只描述业务参数，不能替代项目与执行权检查。
 
+op 属性路径拒绝 `__proto__`、`prototype` 和 `constructor` 片段，嵌套写入只访问对象自身属性。
+
 **适用场景**：
 
 - 修改节点字段（`_active` / `_lpos` / `_name` / 子节点顺序）

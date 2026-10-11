@@ -54,7 +54,7 @@ function execSetComponentField(prefabData, op) {
   let cursor = comp;
   for (let i = 0; i < property.length - 1; i++) {
     const k = property[i];
-    if (cursor[k] === null || cursor[k] === undefined || typeof cursor[k] !== 'object') {
+    if (!Object.hasOwn(cursor, k) || cursor[k] === null || cursor[k] === undefined || typeof cursor[k] !== 'object') {
       throw new Error(
         `editPrefab [set-component-field]: 路径 ${property.slice(0, i + 1).join('.')} 不是对象（实际值 ${JSON.stringify(cursor[k])}），无法继续下钻`
       );

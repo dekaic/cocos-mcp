@@ -50,7 +50,7 @@ function setByPropertyPath(obj, pathParts, value) {
   }
   const head = pathParts[0];
   const tail = pathParts.slice(1);
-  if (!obj[head] || typeof obj[head] !== 'object') {
+  if (!Object.hasOwn(obj, head) || !obj[head] || typeof obj[head] !== 'object') {
     obj[head] = typeof tail[0] === 'number' ? [] : {};
   }
   setByPropertyPath(obj[head], tail, value);

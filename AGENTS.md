@@ -72,7 +72,7 @@
 
 ## 查询、预览与错误
 
-- asset_query_assets 大工程主动传 limit 与 fields；省略分页仍返回全部匹配项。
+- asset_query_assets 先按任务收窄 pattern，再传 offset、limit 与 fields；寻找目标默认只取 url、uuid、type，确认候选后才查详情。按 hasMore／nextOffset 翻页，不把第一页当成全部；分页在 AssetDB 查询后切片，不能替代收窄 pattern。
 - local_get_status 的可选 mode:identity 只查身份与工具／资源描述版本，常规发现使用该模式；需要 Git、预览或日志时省略 mode 查询完整诊断。只在实际 schema 支持时传该参数。
 - scene_execute_component_method 使用组件 dump UUID，不是节点 UUID；参数错误不能当作 (ok)。派发后的不确定失败保留冻结。
 - 预览 URL 首选 preview_query_url，次选 local_get_status；仅可使用项目明确声明的只读兜底。不猜 localhost:7456，不读取未声明的旧预览文件。

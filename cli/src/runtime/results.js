@@ -1,5 +1,24 @@
 'use strict';
 
+// Only infer bare content when every block has a known type and its required fields.
+function isContentBlock(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    switch (value.type) {
+        case 'text': return typeof value.text === 'string';
+        case 'image':
+        case 'audio': return typeof value.data === 'string' && typeof value.mimeType === 'string';
+        case 'resource_link': return typeof value.uri === 'string' && typeof value.name === 'string';
+        case 'resource': {
+            const resource = value.resource;
+            return !!resource && typeof resource === 'object' && !Array.isArray(resource) &&
+                typeof resource.uri === 'string' &&
+                (typeof resource.text === 'string' || typeof resource.blob === 'string');
+        }
+        default: return false;
+    }
+}
+
+
 const CONTROL_SCHEMA = { type: 'object', required: ['cocosMcpControl'], additionalProperties: false,
     properties: { cocosMcpControl: { type: 'object', required: ['code', 'state', 'nextAction'],
         properties: { code: { type: 'string' }, state: { type: 'string' }, operationId: { type: 'string' },
@@ -14,7 +33,7 @@ function normalize(result) {
         }
         return { content: [{ type: 'text', text: JSON.stringify(business) }], ...(Object.keys(metadata).length ? { _meta: metadata } : {}) };
     }
-    return { content: Array.isArray(result) && result[0] && result[0].type ? result : [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result === undefined ? null : result) }] };
+    return { content: Array.isArray(result) && result.length > 0 && result.every(isContentBlock) ? result : [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result === undefined ? null : result) }] };
 }
 function control(code, context = {}) {
     const state = context.state || 'failed';

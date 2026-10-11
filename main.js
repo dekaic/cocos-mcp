@@ -295,7 +295,13 @@ exports.methods = {
         return results;
     },
     /** Panel 使用：返回当前插件状态快照 */
-    async getStatus() {
+    async getStatus(mode) {
+        if (mode === 'identity') {
+            var catalogVersions = _mcpServer.catalogVersions();
+            _runtimeIdentity.toolSchemaHash = catalogVersions.tools;
+            return { projectPath: _registration.projectPath, instanceId: _registration.instanceId,
+                processIdentity: _registration.owner, extensionRuntime: Object.assign({}, _runtimeIdentity), catalogVersions };
+        }
         var url = await getPreviewUrl();
         writeDevReloadInfo(url);
         var portMatch = url ? url.match(/:(\d+)/) : null;
@@ -427,12 +433,13 @@ async function startMcpServer() {
     var resourceDefs = tdef.defineResources(ctx);
     _runtimeIdentity.toolSchemaHash = runtimeIdentity.hashToolSchemas(toolDefs);
 
-    // 只计真实的工具调用 / 资源读取，不计 router 每 15s 的 initialize/tools-list 探活——
+    // 只计业务工具调用 / 资源读取，不计轻量身份探测与 initialize/tools-list——
     // 否则计数永远在涨，无法用于判断「业务指令到没到编辑器」。
     // lastRequestAt/lastTool 是判活主信号（曾因 requestCount 初始化后无人自增、恒 0，被当成转发断裂误诊）。
     var stats = { startedAt: new Date().toISOString(), requestCount: 0, lastRequestAt: null, lastTool: null };
     function countCall(name, fn) {
         return function () {
+            if (name === 'local_get_status' && arguments[0] && arguments[0].mode === 'identity') return fn.apply(this, arguments);
             stats.requestCount++;
             stats.lastRequestAt = new Date().toISOString();
             stats.lastTool = name;
@@ -471,6 +478,7 @@ async function startMcpServer() {
         toolCount: toolDefs.length,
         resourceCount: resourceDefs.length,
         stats: stats,
+        catalogVersions: function () { return { tools: runtimeIdentity.hashToolSchemas(server.tools), resources: runtimeIdentity.hashResourceSchemas(server.resources) }; },
         stop: function () { return server.stop(); },
     };
     writeRegistry();
@@ -494,7 +502,7 @@ function buildToolCtx() {
             listWorktrees: function () { return exports.methods.listWorktrees(); },
             openDevDir: function () { return exports.methods.openDevDir(); },
             cleanDevDir: function () { return exports.methods.cleanDevDir(); },
-            getStatus: function () { return exports.methods.getStatus(); },
+            getStatus: function (mode) { return exports.methods.getStatus(mode); },
             reloadPackage: doRestartSelf,
             fixMeta: function (opts) {
                 var mod = require('./cli/src/editor/fix-meta.js');

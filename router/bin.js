@@ -12,6 +12,7 @@ var createClient = require('../cli/src/runtime/http-client').createClient;
 var createStore = require('../cli/src/runtime/operations').createStore;
 var classify = require('../cli/src/runtime/effects').classify;
 var results = require('../cli/src/runtime/results');
+var descriptors = require('../server/runtime-identity');
 var offlineTools = require('./src/offline-tools.js');
 var editorControl = require('./src/editor-control.js');
 var ROUTER_INFO = { name: 'cocos-mcp-router', version: '3.0.0' };
@@ -56,6 +57,10 @@ function createRouter(options) {
     var store = options.store || createStore();
     var editors = new Map();
     var toolMap = new Map();
+    var clientCache = new Map();
+    var toolSnapshot;
+    var snapshotKey;
+    var toolSignature;
     var discovery;
     var discoveryDiagnostics = [];
     var initialized = false;
@@ -64,7 +69,7 @@ function createRouter(options) {
     var readRegistry = options.readRegistry || registry.readRegistry;
     var makeClient = options.createClient || createClient;
 
-    function tools() {
+    function buildTools() {
         var list = [];
         toolMap = new Map();
         for (var editor of editors.values()) {
@@ -89,7 +94,24 @@ function createRouter(options) {
                         outcome: { type: 'string', enum: ['accept_current_state', 'confirm_no_effect'] }, evidence: { type: 'string' } } } },
         ], offlineTools.OFFLINE_TOOLS, editorControl.EDITOR_TOOLS);
     }
-    function signature() { return identity.hash(JSON.stringify(identity.stable(tools()))); }
+    function tools() { return toolSnapshot; }
+    function signature() { return toolSignature; }
+    function publishTools() {
+        toolSnapshot = buildTools();
+        toolSignature = identity.hash(JSON.stringify(identity.stable(toolSnapshot)));
+        runtime.toolSchemaHash = toolSignature;
+    }
+    publishTools();
+    function supportsIdentity(list) {
+        var status = list.find(function (tool) { return tool.name === 'local_get_status'; });
+        var mode = status && status.inputSchema && status.inputSchema.properties && status.inputSchema.properties.mode;
+        return !!(mode && Array.isArray(mode.enum) && mode.enum.includes('identity'));
+    }
+    async function catalog(client, method, key) {
+        var response = await client.request(method);
+        if (response.error || !response.result || !Array.isArray(response.result[key])) throw identity.fault('CATALOG_UNAVAILABLE', 'Cannot read ' + method);
+        return response.result[key];
+    }
     function discover() {
         if (discovery) return discovery;
         discovery = (async function () {
@@ -97,27 +119,51 @@ function createRouter(options) {
             var entries = await readRegistry();
             discoveryDiagnostics = entries.diagnostics || [];
             var next = [];
+            var nextCache = new Map();
             await Promise.all(entries.map(async function (entry) {
                 try {
-                    var client = makeClient(entry);
+                    // Credentials participate in the private cache key, never in public metadata.
+                    var key = JSON.stringify([entry.projectPath, entry.instanceId, entry.pid, entry.processIdentity,
+                        entry.transport.url, entry.transport.bearerToken]);
+                    var cached = clientCache.get(key);
+                    var client = cached ? cached.client : makeClient(entry);
                     await client.initialize();
-                    var status = await client.request('tools/call', { name: 'local_get_status', arguments: { _target: client.target } });
-                    if (status.error || !status.result || status.result.isError) return;
+                    var toolList = cached && cached.tools;
+                    if (!toolList) toolList = await catalog(client, 'tools/list', 'tools');
+                    var light = supportsIdentity(toolList);
+                    var status = await client.request('tools/call', { name: 'local_get_status', arguments: { _target: client.target, ...(light ? { mode: 'identity' } : {}) } });
+                    if (status.error || !status.result || status.result.isError) throw identity.fault('IDENTITY_UNAVAILABLE', 'Cannot verify service identity');
                     var value = status.result.structuredContent || JSON.parse(status.result.content[0].text);
                     if (value.instanceId !== entry.instanceId || value.projectPath !== entry.projectPath ||
                         !value.processIdentity || value.processIdentity.startId !== entry.processIdentity.startId ||
-                        value.processIdentity.pid !== entry.pid) return;
-                    var toolResponse = await client.request('tools/list');
-                    var resourceResponse = await client.request('resources/list');
-                    if (toolResponse.error || resourceResponse.error) return;
-                    next.push(Object.assign({}, entry, { client, tools: toolResponse.result.tools || [], resources: resourceResponse.result.resources || [] }));
-                } catch (_) {
-                    // No endpoint-based cache fallback: a new generation never inherits an old generation's authority.
+                        value.processIdentity.pid !== entry.pid) throw identity.fault('TARGET_STALE', 'Observed service identity differs from registration');
+                    var versions = light && value.catalogVersions;
+                    if (light && (!versions || typeof versions.tools !== 'string' || !versions.tools || typeof versions.resources !== 'string' || !versions.resources)) throw identity.fault('CATALOG_UNAVAILABLE', 'Descriptor versions are missing');
+                    if (cached && (!versions || !cached.versions || versions.tools !== cached.versions.tools)) toolList = await catalog(client, 'tools/list', 'tools');
+                    var resourceList = cached && cached.resources;
+                    if (!resourceList || !versions || !cached.versions || versions.resources !== cached.versions.resources) resourceList = await catalog(client, 'resources/list', 'resources');
+                    var actual = { tools: cached && toolList === cached.tools ? cached.hashes.tools : descriptors.hashToolSchemas(toolList),
+                        resources: cached && resourceList === cached.resources ? cached.hashes.resources : descriptors.hashResourceSchemas(resourceList) };
+                    if (versions && (actual.tools !== versions.tools || actual.resources !== versions.resources)) throw identity.fault('CATALOG_CHANGED', 'Descriptors changed during discovery; scan again');
+                    nextCache.set(key, { client, tools: toolList, resources: resourceList, versions: versions || null, hashes: actual });
+                    var actualRuntime = {};
+                    for (var field of ['sourceRealPath', 'sourceGitHead', 'sourceDirty', 'runtimeBuildId', 'toolSchemaHash', 'loadedAt']) {
+                        if (value.extensionRuntime && Object.hasOwn(value.extensionRuntime, field)) actualRuntime[field] = value.extensionRuntime[field];
+                    }
+                    next.push(Object.assign({}, entry, actualRuntime, { client, tools: toolList, resources: resourceList,
+                        catalogVersions: actual }));
+                } catch (error) {
+                    // Failed probes lose authority and cached clients; no stale endpoint fallback or mutation replay.
+                    discoveryDiagnostics.push({ projectPath: entry.projectPath, instanceId: entry.instanceId, code: error.code || 'DISCOVERY_FAILED' });
                 }
             }));
             editors = new Map(assignAliases(next).map(function (entry) { return [entry.instanceId, entry]; }));
+            var nextKey = JSON.stringify([Array.from(nextCache.keys()).sort(), Array.from(editors.values()).map(function (entry) {
+                return [entry.instanceId, entry.shortName, entry.catalogVersions];
+            })]);
+            clientCache = nextCache;
+            if (nextKey !== snapshotKey) { publishTools(); snapshotKey = nextKey; }
             var after = signature();
-            runtime.toolSchemaHash = after;
             if (initialized && before !== after) notify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
         })().finally(function () { discovery = null; });
         return discovery;

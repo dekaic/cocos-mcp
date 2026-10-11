@@ -105,8 +105,18 @@ function hashToolSchemas(tools) {
     return crypto.createHash('sha256').update(JSON.stringify(stable)).digest('hex');
 }
 
+function hashResourceSchemas(resources) {
+    var descriptors = (resources || []).map(function (resource) {
+        var { read, ...descriptor } = resource;
+        return { ...descriptor, name: resource.name || resource.uri,
+            description: resource.description || '', mimeType: resource.mimeType || 'text/plain' };
+    }).sort(function (a, b) { return a.uri.localeCompare(b.uri); });
+    return crypto.createHash('sha256').update(JSON.stringify(sortObject(descriptors))).digest('hex');
+}
+
 module.exports = {
     createRuntimeIdentity: createRuntimeIdentity,
     hashRuntimeFiles: hashRuntimeFiles,
     hashToolSchemas: hashToolSchemas,
+    hashResourceSchemas: hashResourceSchemas,
 };

@@ -41,7 +41,7 @@ test('protocol boundary: Router keeps notification silence and rejects malformed
     assert.equal((await handle({ jsonrpc: '2.0', id: 2, method: 'unknown' })).error.code, -32601);
 });
 
-async function fixture(t, mutate) {
+async function fixture(t, mutate, light = false) {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-router-contract-')));
     const projectPath = path.join(root, 'project');
     fs.mkdirSync(projectPath);
@@ -51,8 +51,13 @@ async function fixture(t, mutate) {
     const registration = registry.createRegistration(projectPath, directory);
     const store = createStore({ stateRoot: path.join(root, 'state') });
     const definitions = wrapTools([
-        { name: 'local_get_status', inputSchema: { type: 'object', properties: {} }, handler: () => ({
-            projectPath, instanceId: registration.instanceId, processIdentity: registration.owner }) },
+        { name: 'local_get_status', inputSchema: { type: 'object', properties: light ? { mode: { type: 'string', enum: ['identity'] } } : {} }, handler: () => ({
+            projectPath, instanceId: registration.instanceId, processIdentity: registration.owner,
+            ...(light ? { catalogVersions: {
+                tools: require('../../server/runtime-identity').hashToolSchemas(server.tools),
+                resources: require('../../cli/src/runtime/identity').hash(JSON.stringify(require('../../cli/src/runtime/identity').stable(
+                    server.dispatcher.dispatch({ jsonrpc: '2.0', method: 'resources/list', id: 1 }).result.resources.slice().sort((a, b) => a.uri.localeCompare(b.uri))))),
+            } } : {}) }) },
         { name: 'scene_open_scene', description: 'open scene',
             inputSchema: { type: 'object', properties: { uuid: { type: 'string' } }, required: ['uuid'] }, handler: mutate },
     ], registration, store);
@@ -116,6 +121,105 @@ test('same-count metadata changes update the full advertised tool signature', as
     f.server.tools.find(tool => tool.name === 'scene_open_scene').annotations.title = 'updated contract';
     await f.router.discover();
     assert.notEqual(f.router.signature(), before);
+});
+
+test('ten steady discoveries reuse one client and catalog; same-instance schema changes refresh independently', async t => {
+    // The identity fixture hashes current descriptors, so same-port metadata edits are observable.
+    const f = await fixture(t, () => 'opened', true);
+    let clients = 0;
+    let sessions = 0;
+    let responseBytes = 0;
+    const dispatch = f.server.dispatcher.dispatchAsync;
+    t.mock.method(f.server.dispatcher, 'dispatchAsync', (message, context) => {
+        if (message.method === 'initialize') sessions++;
+        return dispatch(message, context);
+    });
+    const calls = [];
+    const notifications = [];
+    const router = createRouter({ store: f.store, readRegistry: f.entries, notify: value => notifications.push(value), createClient: entry => {
+        clients++;
+        const client = createClient(entry);
+        return { ...client, request: async (method, params) => {
+            calls.push([method, params]);
+            const response = await client.request(method, params);
+            responseBytes += Buffer.byteLength(JSON.stringify(response));
+            return response;
+        } };
+    } });
+    for (let i = 0; i < 10; i++) await router.discover();
+    const count = method => calls.filter(call => call[0] === method).length;
+    t.diagnostic(JSON.stringify({ scans: 10, clients, sessions, toolLists: count('tools/list'), resourceLists: count('resources/list'), probes: count('tools/call'), responseBytes }));
+    assert.equal(clients, 1);
+    assert.equal(sessions, 1);
+    assert.equal(count('tools/list'), 1);
+    assert.equal(count('resources/list'), 1);
+    assert.ok(calls.filter(call => call[0] === 'tools/call').every(call => call[1].arguments.mode === 'identity'));
+    const snapshot = router.tools();
+    const before = router.signature();
+    assert.equal(router.tools(), snapshot);
+    router.initialized();
+    f.server.tools.find(tool => tool.name === 'scene_open_scene').annotations.title = 'new title';
+    await router.discover();
+    assert.equal(count('tools/list'), 2);
+    assert.equal(count('resources/list'), 1);
+    assert.notEqual(router.signature(), before);
+    assert.equal(notifications.length, 1);
+    f.server.resources[0].annotations.priority = 0.8;
+    const resources = await router.resources();
+    assert.equal(count('tools/list'), 2);
+    assert.equal(count('resources/list'), 2);
+    assert.equal(resources[0].annotations.priority, 0.8);
+    assert.equal(clients, 1);
+});
+
+test('discovery invalidates on project, instance, process, endpoint, credential and liveness changes', async () => {
+    const hashes = require('../../server/runtime-identity');
+    const definitions = [{ name: 'local_get_status', inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['identity'] } } } }];
+    let entry = { projectPath: '/fixture', projectShortName: 'fixture', instanceId: 'one', pid: 123,
+        processIdentity: { pid: 123, startId: 'start' }, transport: { url: 'http://127.0.0.1:7000/mcp', bearerToken: 'credential-one' } };
+    let available = true;
+    let wrongIdentity = false;
+    let clients = 0;
+    const router = createRouter({ readRegistry: () => [entry], createClient: observed => {
+        clients++;
+        return { target: { projectPath: observed.projectPath, instanceId: observed.instanceId }, initialize: async () => {},
+            request: async (method) => {
+                if (!available) throw new Error('simulated connection loss');
+                if (method === 'tools/list') return { result: { tools: definitions } };
+                if (method === 'resources/list') return { result: { resources: [] } };
+                return { result: { content: [{ type: 'text', text: JSON.stringify({ projectPath: observed.projectPath,
+                    instanceId: wrongIdentity ? 'different-generation' : observed.instanceId, processIdentity: observed.processIdentity,
+                    catalogVersions: { tools: hashes.hashToolSchemas(definitions), resources: hashes.hashResourceSchemas([]) } }) }] } };
+            } };
+    } });
+    await router.discover();
+    await router.discover();
+    assert.equal(clients, 1);
+    for (const change of [
+        { projectPath: '/other' }, { instanceId: 'two' }, { processIdentity: { pid: 123, startId: 'next-start' } },
+        { pid: 124, processIdentity: { pid: 124, startId: 'next-start' } },
+        { transport: { ...entry.transport, url: 'http://127.0.0.1:7001/mcp' } },
+        { transport: { ...entry.transport, bearerToken: 'credential-two' } },
+    ]) {
+        entry = { ...entry, ...change };
+        const before = clients;
+        await router.discover();
+        assert.equal(clients, before + 1);
+        await router.discover();
+        assert.equal(clients, before + 1);
+    }
+    available = false;
+    await router.discover();
+    assert.ok(router.tools().every(tool => !tool.name.includes('__')));
+    available = true;
+    const before = clients;
+    await router.discover();
+    assert.equal(clients, before + 1);
+    wrongIdentity = true;
+    const listing = await router.call('router_list_editors', {});
+    assert.deepEqual(JSON.parse(listing.content[0].text), []);
+    assert.equal(listing.structuredContent.discoveryDiagnostics[0].code, 'TARGET_STALE');
+    assert.doesNotMatch(JSON.stringify(listing), /credential-one|credential-two|bearerToken/);
 });
 
 test('overlapping discovery is single-flight and publishes one complete snapshot', async t => {

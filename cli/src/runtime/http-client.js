@@ -3,7 +3,7 @@ const http = require('http');
 const { fault } = require('./identity');
 
 function createClient(entry, options = {}) {
-    const transport = entry.transport;
+    const transport = { ...entry.transport };
     if (!transport || typeof transport.bearerToken !== 'string' || !transport.bearerToken) throw fault('CLIENT_MIGRATION_REQUIRED', 'Authenticated service registration is required');
     const endpoint = new URL(transport.url);
     if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !endpoint.port || endpoint.pathname !== '/mcp' || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) throw fault('INVALID_ENDPOINT', 'Only a numeric local MCP endpoint is supported');
@@ -43,7 +43,11 @@ function createClient(entry, options = {}) {
             if (response.error || !response.result || !['2025-03-26', '2025-06-18'].includes(response.result.protocolVersion)) throw fault('PROTOCOL_MISMATCH', 'MCP protocol negotiation failed');
             protocolVersion = response.result.protocolVersion;
             await post('notifications/initialized', undefined, true);
-        })();
+        })().catch(error => {
+            initialized = undefined;
+            sessionId = undefined;
+            throw error;
+        });
         return initialized;
     }
     async function request(method, params) { await initialize(); return post(method, params, false); }

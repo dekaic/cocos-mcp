@@ -135,6 +135,12 @@ node /absolute/path/cocos-mcp/cli/bin/cocos-mcp-cli.js operation-reconcile \
 
 重载初次返回 scheduled／running 也遵守这一规则：旧服务交接与停止、新 `instanceId`、`loadedAt`、认证和实际 runtime/schema 全部核对后才结案；交接不完整保持 unknown。
 
+## 轻量发现
+
+`local_get_status({mode:"identity", _target})` 只返回真实项目路径、instanceId、进程启动身份、extensionRuntime 和 `catalogVersions: {tools, resources}`；不查预览、Git 或命令日志，不更新状态文件。省略 mode 仍返回完整诊断。描述版本分别覆盖工具 schema／元数据与资源描述，不代表资源正文版本。
+
+Router 首次读取工具定义后才使用支持的 identity 模式；尚未支持该参数的服务保留完整探测与目录刷新。每轮都认证并核对实例／进程身份，同一代且 endpoint、凭据未变时复用 HTTP 会话。工具或资源描述版本变化时只更新对应清单；完整名称映射、工具列表与签名按发现变化重建。失联、身份不符或描述版本与清单不一致时撤下该目标并报告 discoveryDiagnostics，不以缓存授权。初始化失败允许后续重新连接，连接恢复不重放修改请求。
+
 ## 迁移与不保证的事项
 
 - 迁移旧 `<pid>.json`、最新心跳选择器、裸 URL／免认证客户端、未初始化客户端和遗漏 dryRun／operationId 的调用方；不提供兼容写入回退。

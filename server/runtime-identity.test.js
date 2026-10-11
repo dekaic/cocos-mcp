@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { hashRuntimeFiles, hashToolSchemas } = require('./runtime-identity.js');
+const { hashRuntimeFiles, hashToolSchemas, hashResourceSchemas } = require('./runtime-identity.js');
 
 test('runtime build id is stable and changes with runtime source', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cocos-mcp-runtime-id-'));
@@ -43,4 +43,16 @@ test('tool schema hash ignores object key order and changes with schema', () => 
 
     assert.equal(hashToolSchemas(left), hashToolSchemas(reordered));
     assert.notEqual(hashToolSchemas(left), hashToolSchemas(changed));
+});
+
+test('resource descriptor hash matches the protocol list and includes metadata changes', () => {
+    const resources = [{ uri: 'test://one', title: 'One', annotations: { priority: 0.5 }, read: () => 'data' }];
+    const dispatcher = require('../mcp-sdk').createDispatcher({ resources });
+    const listed = dispatcher.dispatch({ jsonrpc: '2.0', method: 'resources/list', id: 1 }).result.resources;
+    const before = hashResourceSchemas(resources);
+    assert.equal(hashResourceSchemas(listed), before);
+    resources[0].read = () => 'different content';
+    assert.equal(hashResourceSchemas(resources), before);
+    resources[0].title = 'New title';
+    assert.notEqual(hashResourceSchemas(resources), before);
 });

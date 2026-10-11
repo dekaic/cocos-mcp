@@ -528,10 +528,10 @@ function defineTools(ctx) {
         },
         {
             name: 'local_get_status',
-            description: '获取插件本地状态（git 分支/HEAD、watchers、预览、命令日志）',
-            inputSchema: { type: 'object', properties: {} },
-            handler: async function () {
-                return await local.getStatus();
+            description: '获取插件本地状态；mode:identity 仅返回项目、服务／进程与运行身份、工具／资源描述版本，不查询 Git、预览或日志。省略 mode 保留完整诊断。',
+            inputSchema: { type: 'object', properties: { mode: { type: 'string', enum: ['identity'] } } },
+            handler: async function (args) {
+                return await local.getStatus(args && args.mode);
             },
         },
         {
